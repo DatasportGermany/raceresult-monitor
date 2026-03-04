@@ -22,61 +22,61 @@ def time_to_seconds(t_str):
         return 0
 
 def render_competition(df, comp_name):
-    """Kernlogik: Wer hat gestartet, aber kein Ziel-Signal?"""
-    # Spaltennamen säubern
+    """Sicherheits-Check: Wer hat ein Start-Signal, aber kein Ziel-Signal?"""
     df.columns = [str(c).strip() for c in df.columns]
     
-    # 1. Spalten dynamisch finden (Fuzzy Matching)
-    bib_col = next((c for c in df.columns if 'bib' in c.lower() or 'stnr' in c.lower()), "Bib")
-    name_col = next((c for c in df.columns if 'name' in c.lower()), "Name")
-    start_col = next((c for c in df.columns if 'start' in c.lower()), None)
-    goal_col = next((c for c in df.columns if 'ziel' in c.lower() or 'finish' in c.lower()), None)
-    status_col = next((c for c in df.columns if 'status' in c.lower()), None)
+    # 1. Spalten-Zuordnung basierend auf deinem JSON-Ausschnitt
+    # Wir suchen nach 'Startnummer', 'Start', 'Ziel' und 'Status'
+    bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr']), "Startnummer")
+    start_col = next((c for c in df.columns if c.lower() == 'start' or 'startzeit' in c.lower()), None)
+    goal_col = next((c for c in df.columns if c.lower() == 'ziel' or 'finish' in c.lower()), None)
+    status_col = next((c for c in df.columns if 'status' in c.lower()), "Status")
 
     if start_col and goal_col:
-        # Konvertierung zu Sekunden für mathematischen Vergleich
+        # Umwandlung in Sekunden zur Berechnung
         df['S_Sec'] = df[start_col].apply(time_to_seconds)
         df['G_Sec'] = df[goal_col].apply(time_to_seconds)
 
-        # 2. FILTER: Nur Teilnehmer mit Status "0" (regulär unterwegs)
-        # Teilnehmer mit DNF/DSQ/DNS werden hier bewusst ignoriert
-        if status_col:
-            df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy()
-        else:
-            df_reg = df.copy()
+        # Filter auf Status 0 (regulär)
+        df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy()
 
-        # 3. LOGIK: 'Auf der Strecke'
-        # Bedingung: Startzeit vorhanden (>0) UND Zielzeit ist absolut leer (0)
+        # DIE KORRIGIERTE LOGIK:
+        # Ein Teilnehmer ist auf der Strecke, wenn:
+        # 1. Er eine Startzeit hat (S_Sec > 0)
+        # 2. Die Zielzeit absolut leer ist (None, NaN oder leerer String)
+        
+        def is_empty(val):
+            v = str(val).strip().lower()
+            return v in ["", "none", "nan", "0", "00:00:00"]
+
         auf_strecke = df_reg[
             (df_reg['S_Sec'] > 0) & 
-            ((df_reg['G_Sec'] == 0) | (df_reg[goal_col].isna()) | (df_reg[goal_col].astype(str).str.strip() == ""))
+            (df_reg[goal_col].apply(is_empty))
         ]
         
-        im_ziel = df_reg[df_reg['G_Sec'] > 0]
+        im_ziel = df_reg[
+            (df_reg['S_Sec'] > 0) & 
+            (~df_reg[goal_col].apply(is_empty))
+        ]
         
-        with st.expander(f"🏆 Wettbewerb: {comp_name}", expanded=True):
+        with st.expander(f"🏆 {comp_name}", expanded=True):
             if not auf_strecke.empty:
                 st.warning(f"🔔 {len(auf_strecke)} Teilnehmer noch auf der Strecke")
                 
-                # Fortschrittsbalken berechnen
-                total_started = len(im_ziel) + len(auf_strecke)
-                progress = len(im_ziel) / total_started if total_started > 0 else 0
-                st.progress(progress)
+                # Fortschrittsbalken
+                total = len(im_ziel) + len(auf_strecke)
+                st.progress(len(im_ziel) / total if total > 0 else 0)
                 
-                # Liste der vermissten Teilnehmer anzeigen
-                disp_cols = [c for c in [bib_col, name_col, start_col] if c in df_reg.columns]
-                st.dataframe(
-                    auf_strecke[disp_cols].sort_values(by=start_col), 
-                    use_container_width=True, 
-                    hide_index=True
-                )
+                # Anzeige der Liste
+                disp = [c for c in [bib_col, "Name", start_col] if c in df_reg.columns]
+                st.dataframe(auf_strecke[disp], use_container_width=True, hide_index=True)
             else:
                 if not im_ziel.empty:
-                    st.success(f"✅ Alle {len(im_ziel)} gestarteten Teilnehmer sind im Ziel.")
+                    st.success(f"✅ Alle {len(im_ziel)} Teilnehmer sind im Ziel.")
                 else:
-                    st.info("Warten auf Starts... (Keine aktiven Teilnehmer mit Startzeit gefunden)")
+                    st.info("Noch keine Starts erfasst.")
     else:
-        st.error(f"⚠️ Spaltenfehler in '{comp_name}': Startzeit oder Zielzeit fehlen im Export.")
+        st.error(f"Spalten nicht gefunden. Erkannt: Start='{start_col}', Ziel='{goal_col}'")
 
 def process_api(url, event_label):
     """Lädt Daten und trennt nach Wettbewerben."""
