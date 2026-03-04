@@ -24,56 +24,55 @@ def time_to_seconds(t_str):
 
 def render_competition(df, comp_name):
     """Analysiert einen gefilterten Datensatz eines Wettbewerbs."""
-    # 1. Status-Filter: Nur reguläre Teilnehmer (Status == 0)
-    # Wir wandeln alles in Strings um, um sicher zu gehen
-    df['Status'] = df['Status'].astype(str).str.strip()
-    df_clean = df[df['Status'] == "0"].copy()
+    # 1. Spaltennamen normalisieren (für Fehlertoleranz)
+    df.columns = [str(c).strip() for c in df.columns]
     
-    # 2. Spalten für Start und Ziel dynamisch finden
+    # 2. Status-Filter
+    status_col = next((c for c in df.columns if 'status' in c.lower()), None)
+    if status_col:
+        df[status_col] = df[status_col].astype(str).str.strip()
+        df_clean = df[df[status_col] == "0"].copy()
+    else:
+        df_clean = df.copy() # Falls kein Status da ist, alle nehmen
+    
+    # 3. Dynamische Spaltensuche für die Anzeige und Berechnung
+    # Wir suchen Spalten, die diese Begriffe enthalten
+    bib_col = next((c for c in df.columns if 'bib' in c.lower() or 'stnr' in c.lower()), None)
+    name_col = next((c for c in df.columns if 'name' in c.lower()), None)
     start_col = next((c for c in df.columns if 'start' in c.lower()), None)
     goal_col = next((c for c in df.columns if 'ziel' in c.lower() or 'finish' in c.lower()), None)
 
+    # Prüfen, ob die kritischen Spalten da sind
     if start_col and goal_col:
         df_clean['S_Sec'] = df_clean[start_col].apply(time_to_seconds)
         df_clean['G_Sec'] = df_clean[goal_col].apply(time_to_seconds)
         df_clean['Netto'] = df_clean['G_Sec'] - df_clean['S_Sec']
 
-        # Status Gruppen
         gestartet = df_clean[df_clean['S_Sec'] > 0]
         im_ziel = df_clean[df_clean['G_Sec'] > 0]
         auf_strecke = df_clean[(df_clean['S_Sec'] > 0) & (df_clean['G_Sec'] == 0)]
         
-        # UI Anzeige pro Wettbewerb
-        with st.expander(f"🏆 {comp_name} | {len(im_ziel)} Finisher | {len(auf_strecke)} auf Strecke", expanded=True):
-            c1, c2 = st.columns([1, 3])
+        with st.expander(f"🏆 {comp_name} | {len(im_ziel)} Finisher", expanded=True):
+            # Nur Spalten anzeigen, die wir auch wirklich gefunden haben
+            display_cols = [c for c in [bib_col, name_col, start_col, goal_col] if c is not None]
             
-            with c1:
-                st.metric("Aktiv auf Strecke", len(auf_strecke))
-                # DNF/DSQ Zähler
-                non_regular = df[df['Status'] != "0"]
-                if not non_regular.empty:
-                    st.caption(f"🚫 {len(non_regular)} Teilnehmer (DNF/DSQ/etc.) ignoriert")
-
-            with c2:
-                # Anomalie-Erkennung (Z-Score)
-                finisher_valid = im_ziel[im_ziel['Netto'] > 0]
-                if len(finisher_valid) >= 5:
-                    avg = finisher_valid['Netto'].mean()
-                    std = finisher_valid['Netto'].std()
-                    
-                    # Schwelle: Mehr als 2 Standardabweichungen schneller
-                    anomalies = finisher_valid[finisher_valid['Netto'] < (avg - 2 * std)]
-                    
-                    if not anomalies.empty:
-                        st.error(f"⚠️ {len(anomalies)} verdächtig schnelle Zeiten erkannt!")
-                        st.dataframe(anomalies[['Bib', 'Name', start_col, goal_col, 'Netto']], use_container_width=True)
-                    else:
-                        st.success("✅ Zeiten liegen im statistischen Normbereich.")
+            # Anomalie-Check
+            finisher_valid = im_ziel[im_ziel['Netto'] > 0]
+            if len(finisher_valid) >= 5:
+                avg = finisher_valid['Netto'].mean()
+                std = finisher_valid['Netto'].std()
+                anomalies = finisher_valid[finisher_valid['Netto'] < (avg - 2 * std)]
+                
+                if not anomalies.empty:
+                    st.error(f"⚠️ {len(anomalies)} Anomalien gefunden!")
+                    # Hier wird nur das angezeigt, was auch gefunden wurde
+                    st.dataframe(anomalies[display_cols + ['Netto']], use_container_width=True)
                 else:
-                    st.info("Sammle Daten für statistische Analyse (min. 5 Finisher benötigt)...")
+                    st.success("✅ Alles im Normbereich")
+            else:
+                st.info("Warte auf Daten...")
     else:
-        st.warning(f"Spalten für Start/Ziel in '{comp_name}' nicht eindeutig gefunden.")
-
+        st.error(f"Fehler: Start- oder Zielspalte fehlt in '{comp_name}'. Gefundene Spalten: {list(df.columns)}")
 def process_api(url, event_label):
     """Lädt Daten von der API und bereitet sie für das Dashboard auf."""
     try:
