@@ -89,4 +89,12 @@ if api_input and start_button or 'active_url' in st.session_state:
                 fig = go.Figure()
                 fig.add_trace(go.Bar(x=[len(im_ziel)], name="Ziel", orientation='h', marker_color='#28a745'))
                 fig.add_trace(go.Bar(x=[len(auf_strecke)], name="Strecke", orientation='h', marker_color='#ffc107'))
-                fig.update_layout(barmode='stack', height=80, margin=dict(t=5, b
+                
+                # Hier lag der Fehler (Klammern prüfen!):
+                fig.update_layout(
+                    barmode='stack', 
+                    height=100, 
+                    margin=dict(t=5, b=5, l=0, r=0), 
+                    showlegend=False
+                )
+                st.plotly_chart(fig, use_container_width=True)
