@@ -45,77 +45,38 @@ def is_empty(val):
 # --- RENDER LOGIK ---
 def render_competition(df, comp_name):
     """Dynamische Analyse mit Zwischenzeiten (Splits)"""
-    # Spaltennamen säubern
     df.columns = [str(c).strip() for c in df.columns]
     
-    # 1. Dynamische Spalten-Identifikation (Fuzzy)
     bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr']), None)
-    # Suche nach Name, Nachname oder Vorname
     name_col = next((c for c in df.columns if any(k in c.lower() for k in ['name', 'nachname', 'vorname'])), None)
     start_col = next((c for c in df.columns if c.lower() == 'start' or 'startzeit' in c.lower()), None)
     goal_col = next((c for c in df.columns if c.lower() == 'ziel' or 'finish' in c.lower()), None)
     status_col = next((c for c in df.columns if 'status' in c.lower()), None)
 
-    # Identifiziere alle Zeit-Spalten für die Split-Logik
-    # Wir nehmen alles, was nach Zeit aussieht, außer das Ziel (für die Prognose)
     time_keywords = ['start', 'km', 'split', 'mess', 'zwischen']
     split_cols = [c for c in df.columns if any(k in c.lower() for k in time_keywords) and c != goal_col]
 
     if start_col and goal_col:
-        # Hilfs-Spalten für Sekunden erstellen (nur für valide Zeitspalten)
-        all_time_cols = split_cols + [goal_col]
-        for col in all_time_cols:
+        for col in split_cols + [goal_col]:
             df[f'{col}_sec'] = df[col].apply(time_to_seconds)
         
-        # Status Filter
-        if status_col:
-            df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy()
-        else:
-            df_reg = df.copy()
+        df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy() if status_col else df.copy()
 
-        # Wer ist im Ziel?
         im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
-        # Wer ist auf der Strecke?
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         
         st.subheader(f"🏆 {comp_name}")
         
         if not auf_strecke.empty:
-            # --- SPLIT LOGIK ---
-            # Finde den letzten Messpunkt für jeden Läufer
+            # --- ETA LOGIK ---
             split_cols_sec = [f'{c}_sec' for c in split_cols]
             auf_strecke['Last_Time_Sec'] = auf_strecke[split_cols_sec].max(axis=1)
             
-            # ETA Berechnung (wenn Finisher da sind)
-            iif not im_ziel.empty:
-                    # Histogramm-Erstellung
-                    # Wir berechnen die Uhrzeit-Labels für die Balken
-                    def format_eta(x):
-                        if x > 0:
-                            return (datetime(2026, 1, 1) + timedelta(seconds=int(x))).strftime("%H:%M")
-                        return "N/A"
-
-                    auf_strecke['ETA_Bin'] = auf_strecke['ETA_Sec'].apply(format_eta)
-                    
-                    # Nur gültige Zeiten für das Diagramm nehmen
-                    valid_eta = auf_strecke[auf_strecke['ETA_Bin'] != "N/A"]
-                    
-                    if not valid_eta.empty:
-                        eta_counts = valid_eta.groupby('ETA_Bin').size().reset_index(name='Anzahl')
-                        
-                        fig = go.Figure(go.Bar(
-                            x=eta_counts['ETA_Bin'], 
-                            y=eta_counts['Anzahl'], 
-                            marker_color='#FFA500'
-                        ))
-                        fig.update_layout(
-                            title="Ankunfts-Welle (Split-basiert)", 
-                            height=350, 
-                            margin=dict(l=0, r=0, t=40, b=0)
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("Prognose startet, sobald der erste Finisher eintrifft.")
+            if not im_ziel.empty:
+                avg_total_time = (im_ziel[f'{goal_col}_sec'] - im_ziel[f'{start_col}_sec']).mean()
+                auf_strecke['ETA_Sec'] = auf_strecke['Last_Time_Sec'] + (avg_total_time - (auf_strecke['Last_Time_Sec'] - auf_strecke[f'{start_col}_sec']))
+            else:
+                auf_strecke['ETA_Sec'] = 0
 
             # --- UI LAYOUT ---
             col_t, col_g = st.columns([1, 1])
@@ -123,7 +84,6 @@ def render_competition(df, comp_name):
             with col_t:
                 st.warning(f"🔔 {len(auf_strecke)} Teilnehmer auf der Strecke")
                 
-                # Bestimme den Namen des letzten Messpunkts als Text
                 def get_last_point_name(row):
                     best_col = start_col
                     max_s = 0
@@ -134,16 +94,32 @@ def render_competition(df, comp_name):
                     return best_col
 
                 auf_strecke['Letzter Messpunkt'] = auf_strecke.apply(get_last_point_name, axis=1)
-                
-                # Erstelle Liste der verfügbaren Anzeige-Spalten (verhindert 'Key Error')
                 display_list = [c for c in [bib_col, name_col, 'Letzter Messpunkt'] if c is not None]
                 st.dataframe(auf_strecke[display_list], use_container_width=True, hide_index=True)
 
             with col_g:
                 if not im_ziel.empty:
-                    # Histogramm-Erstellung
-                    auf_strecke['ETA_Bin'] = auf_strecke['ETA_Sec'].apply(lambda x: (datetime(20
+                    def format_eta(x):
+                        if x > 0:
+                            return (datetime(2026, 1, 1) + timedelta(seconds=int(x))).strftime("%H:%M")
+                        return "N/A"
 
+                    auf_strecke['ETA_Bin'] = auf_strecke['ETA_Sec'].apply(format_eta)
+                    valid_eta = auf_strecke[auf_strecke['ETA_Bin'] != "N/A"]
+                    
+                    if not valid_eta.empty:
+                        eta_counts = valid_eta.groupby('ETA_Bin').size().reset_index(name='Anzahl')
+                        fig = go.Figure(go.Bar(x=eta_counts['ETA_Bin'], y=eta_counts['Anzahl'], marker_color='#FFA500'))
+                        fig.update_layout(title="Ankunfts-Welle (Split-basiert)", height=350, margin=dict(l=0, r=0, t=40, b=0))
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Prognose startet, sobald der erste Finisher eintrifft.")
+        else:
+            st.success("✅ Alle Teilnehmer im Ziel.")
+    else:
+        st.error(f"Spaltenfehler in '{comp_name}'.")
+
+# --- DASHBOARD LOGIK ---
 def run_dashboard(event_obj):
     refresh_rate = 30
     if not st.query_params.get("event"):
@@ -160,7 +136,6 @@ def run_dashboard(event_obj):
         else: return
 
         df.columns = [str(c).strip() for c in df.columns]
-        
         comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
         
         if comp_col:
