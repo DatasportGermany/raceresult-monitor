@@ -53,25 +53,24 @@ def render_competition(df, comp_name):
     ordered_times = [c for c in df.columns if any(k in c.lower() for k in time_keywords) and c != goal_col] + [goal_col]
 
     if start_col and goal_col:
-        now_sec = datetime.now().hour * 3600 + datetime.now().minute * 60 + datetime.now().second
+        # Aktuelle Zeit ermitteln
+        now = datetime.now()
+        now_sec = now.hour * 3600 + now.minute * 60 + now.second
 
         for col in ordered_times:
             df[f'{col}_sec'] = df[col].apply(time_to_seconds)
         
         df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy() if status_col else df.copy()
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
-        im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
         
         st.subheader(f"🏆 {comp_name}")
         
         if not auf_strecke.empty:
             # --- SEKTOREN DURCHSCHNITTE BERECHNEN ---
-            # Wir berechnen, wie lange man im Schnitt von Punkt A nach Punkt B braucht
             sector_averages = {}
             for i in range(len(ordered_times) - 1):
                 col_a = ordered_times[i]
                 col_b = ordered_times[i+1]
-                # Nur Teilnehmer, die beide Punkte passiert haben
                 finished_sector = df_reg[(df_reg[f'{col_a}_sec'] > 0) & (df_reg[f'{col_b}_sec'] > 0)]
                 if not finished_sector.empty:
                     avg_duration = (finished_sector[f'{col_b}_sec'] - finished_sector[f'{col_a}_sec']).mean()
@@ -79,21 +78,23 @@ def render_competition(df, comp_name):
 
             # --- INDIVIDUELLE ANALYSE ---
             def analyze_safety(row):
-                # Finde den letzten Messpunkt
                 last_point = start_col
-                next_point = goal_col
                 last_sec = row[f'{start_col}_sec']
                 
+                # Finde den am weitesten fortgeschrittenen Punkt
                 for i in range(len(ordered_times) - 1):
-                    if row[f'{ordered_times[i]}_sec'] > 0:
-                        last_point = ordered_times[i]
-                        next_point = ordered_times[i+1]
-                        last_sec = row[f'{ordered_times[i]}_sec']
+                    col_name = ordered_times[i]
+                    if row[f'{col_name}_sec'] > 0:
+                        last_point = col_name
+                        last_sec = row[f'{col_name}_sec']
                 
-                time_since_last_contact = (now_sec - last_sec) / 60
+                # Zeit seit letztem Kontakt (verhindere negative Werte durch UTC/Lokalzeit-Mix)
+                time_diff_sec = now_sec - last_sec
+                if time_diff_sec < 0: time_diff_sec = 0
+                time_since_last_contact = time_diff_sec / 60
                 
-                # Hol den Durchschnitt für diesen Sektor (wenn vorhanden)
-                avg_sec = sector_averages.get(last_point, 3600) # Fallback 60 Min
+                # Hol den Durchschnitt für diesen Sektor (Fallback 60 Min)
+                avg_sec = sector_averages.get(last_point, 3600) 
                 avg_min = avg_sec / 60
                 
                 # Flagge wenn: Zeit seit letztem Kontakt > 1.5 * Durchschnittszeit des Sektors
@@ -103,11 +104,19 @@ def render_competition(df, comp_name):
                 if is_overdue:
                     status_text = f"🚩 {status_text} (Schnitt: {int(avg_min)} Min)"
                 
-                return pd.Series([last_point, status_text, time_since_last_contact])
+                # Wir geben ein Dictionary zurück, das ist sicherer für .apply(pd.Series)
+                return {
+                    'Letzter Kontakt': last_point, 
+                    'Sicherheits-Status': status_text, 
+                    'Sort_Min': time_since_last_contact
+                }
 
-            auf_strecke[['Letzter Kontakt', 'Sicherheits-Status', 'Sort_Min']] = auf_strecke.apply(analyze_safety, axis=1)
+            # Hier wird die analyze_safety Funktion aufgerufen und das Ergebnis korrekt zugewiesen
+            safety_results = auf_strecke.apply(analyze_safety, axis=1, result_type='expand')
+            auf_strecke = pd.concat([auf_strecke, safety_results], axis=1)
             
-            display_list = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c is not None]
+            display_list = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c in auf_strecke.columns]
+            
             st.warning(f"⚠️ {len(auf_strecke)} Teilnehmer auf der Strecke")
             st.dataframe(
                 auf_strecke[display_list].sort_values(by='Sort_Min', ascending=False), 
@@ -116,7 +125,8 @@ def render_competition(df, comp_name):
             )
         else:
             st.success("✅ Alle Teilnehmer im Ziel.")
-
+    else:
+        st.error(f"Konnte Start- oder Zielspalte nicht finden.")
 # --- DASHBOARD & NAVIGATION ---
 def run_dashboard(event_obj):
     if not st.query_params.get("event"):
