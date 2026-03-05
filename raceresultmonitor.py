@@ -3,15 +3,30 @@ import pandas as pd
 import requests
 import time
 import urllib.parse
+import json
+import os
+
+# --- DATEI-PFAD FÜR SPEICHERUNG ---
+DB_FILE = "event_db.json"
+
+# --- HELPER FÜR DATENBANK ---
+def load_events():
+    if os.path.exists(DB_FILE):
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+def save_events(events):
+    with open(DB_FILE, "w") as f:
+        json.dump(events, f)
 
 # --- SEITEN-KONFIGURATION ---
 st.set_page_config(page_title="Race Monitor Pro", layout="wide")
 
-# --- URL PARAMETER LOGIK (Public Mode) ---
-# Holt Parameter aus der URL (z.B. ?event=Trollinger)
-public_event = st.query_params.get("event")
+# --- URL PARAMETER LOGIK ---
+public_event_name = st.query_params.get("event")
 
-# --- HELPER FUNKTIONEN ---
+# --- ZEIT-HELPER ---
 def time_to_seconds(t_str):
     try:
         if not t_str or str(t_str).strip() in ["", "0", "00:00:00", "None", "nan"]: 
@@ -26,6 +41,7 @@ def is_empty(val):
     v = str(val).strip().lower()
     return v in ["", "none", "nan", "0", "00:00:00"]
 
+# --- RENDER LOGIK ---
 def render_competition(df, comp_name):
     df.columns = [str(c).strip() for c in df.columns]
     bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr']), "Startnummer")
@@ -38,7 +54,6 @@ def render_competition(df, comp_name):
         df['S_Sec'] = df[start_col].apply(time_to_seconds)
         df['G_Sec'] = df[goal_col].apply(time_to_seconds)
         
-        # Status Filter (Status 0 = OK)
         if status_col in df.columns:
             df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy()
         else:
@@ -60,29 +75,15 @@ def render_competition(df, comp_name):
     else:
         st.error(f"Spaltenfehler in '{comp_name}'.")
 
-# --- EVENT SPEICHER ---
-if 'event_store' not in st.session_state:
-    st.session_state.event_store = []
-
-# --- DASHBOARD LOGIK (Zentralisiert) ---
 def run_dashboard(event_obj):
-    if not event_obj:
-        st.error("Event-Daten nicht gefunden.")
-        return
-
-    # Sidebar nur im Admin-Mode (wenn kein public_event aktiv ist)
     refresh_rate = 30
-    if not public_event:
-        refresh_rate = st.sidebar.slider("Auto-Refresh (Sekunden)", 10, 300, 30)
+    if not public_event_name:
+        refresh_rate = st.sidebar.slider("Auto-Refresh (s)", 10, 300, 30)
 
     try:
         res = requests.get(event_obj['url'], timeout=10)
         data = res.json()
-        if isinstance(data, dict) and 'data' in data:
-            df = pd.DataFrame(data['data'], columns=data.get('columns', []))
-        else:
-            df = pd.DataFrame(data)
-        
+        df = pd.DataFrame(data['data'], columns=data.get('columns', []))
         comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz']), None)
         
         if comp_col:
@@ -96,18 +97,17 @@ def run_dashboard(event_obj):
     except Exception as e:
         st.error(f"Fehler beim Laden: {e}")
 
-# --- NAVIGATION ---
-if public_event:
+# --- APP NAVIGATION ---
+all_events = load_events()
+
+if public_event_name:
     # --- PUBLIC MODE ---
-    st.title(f"📊 Live-Monitor: {public_event}")
-    selected_event = next((e for e in st.session_state.event_store if e['name'] == public_event), None)
+    st.title(f"📊 Live-Monitor: {public_event_name}")
+    selected_event = next((e for e in all_events if e['name'] == public_event_name), None)
     if selected_event:
         run_dashboard(selected_event)
     else:
-        st.error("Dieses Event wurde nicht gefunden.")
-        if st.button("Zurück"):
-            st.query_params.clear()
-            st.rerun()
+        st.error(f"Event '{public_event_name}' nicht gefunden. Wurde es gelöscht?")
 else:
     # --- ADMIN MODE ---
     mode = st.sidebar.radio("Navigation", ["📊 Dashboard", "⚙️ API Verwaltung"])
@@ -118,28 +118,28 @@ else:
             n = st.text_input("Name des Events")
             u = st.text_input("RaceResult JSON URL")
             if st.form_submit_button("Hinzufügen") and n and u:
-                st.session_state.event_store.append({"name": n, "url": u})
+                all_events.append({"name": n, "url": u})
+                save_events(all_events)
+                st.success("Gespeichert!")
                 st.rerun()
 
         st.subheader("Gespeicherte Events & Share-Links")
-        for i, ev in enumerate(st.session_state.event_store):
+        for i, ev in enumerate(all_events):
             col1, col2 = st.columns([4, 1])
-            # URL Encoding für Leerzeichen im Namen
             encoded_name = urllib.parse.quote(ev['name'])
             share_url = f"/?event={encoded_name}" 
-            
             col1.write(f"**{ev['name']}**")
             col1.code(share_url, language="text")
             if col2.button("Löschen", key=f"del_{i}"):
-                st.session_state.event_store.pop(i)
+                all_events.pop(i)
+                save_events(all_events)
                 st.rerun()
 
     elif mode == "📊 Dashboard":
         st.title("📊 Monitor Dashboard")
-        if not st.session_state.event_store:
-            st.info("Keine Events konfiguriert. Bitte wechsle zur 'API Verwaltung'.")
+        if not all_events:
+            st.info("Bitte zuerst unter 'API Verwaltung' ein Event anlegen.")
         else:
-            event_names = [e['name'] for e in st.session_state.event_store]
-            sel_name = st.selectbox("Wähle ein Event:", event_names)
-            selected_event = next(e for e in st.session_state.event_store if e['name'] == sel_name)
+            sel_name = st.selectbox("Wähle ein Event:", [e['name'] for e in all_events])
+            selected_event = next(e for e in all_events if e['name'] == sel_name)
             run_dashboard(selected_event)
