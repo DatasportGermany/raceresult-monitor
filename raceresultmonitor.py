@@ -45,6 +45,14 @@ def time_to_seconds(t_str):
         return 0
     except: return 0
 
+# --- DATA FETCHING (VERHINDERT CACHING) ---
+def fetch_race_data(url):
+    # Hängt einen Zeitstempel an, damit der Server/Browser keine alte Kopie liefert
+    sep = "&" if "?" in url else "?"
+    clean_url = f"{url}{sep}nocache={int(time.time())}"
+    r = requests.get(clean_url, timeout=10).json()
+    return r
+
 # --- RENDER LOGIK ---
 def render_competition(df, comp_name, time_mode):
     df.columns = [str(c).strip() for c in df.columns]
@@ -65,14 +73,14 @@ def render_competition(df, comp_name, time_mode):
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
 
-        # --- ZEIT-LOGIK (Echtzeit vs. Simulation) ---
+        # ZEIT-LOGIK
         if time_mode == "Simulation (Letzter Finisher)" and not im_ziel.empty:
             now_sec = im_ziel[f'{goal_col}_sec'].max()
-            label_suffix = "(Simuliert)"
+            label = "Simuliert (Letzter Finisher)"
         else:
             n = datetime.now()
             now_sec = n.hour * 3600 + n.minute * 60 + n.second
-            label_suffix = "(Echtzeit)"
+            label = "Echtzeit (System)"
 
         st.markdown('<div class="comp-container">', unsafe_allow_html=True)
         st.subheader(f"🏆 {comp_name}")
@@ -108,8 +116,7 @@ def render_competition(df, comp_name, time_mode):
             res = auf_strecke.apply(analyze_safety, axis=1)
             auf_strecke = pd.concat([auf_strecke, res], axis=1)
             
-            ref_str = str(timedelta(seconds=int(now_sec)))
-            st.info(f"Basis-Zeit {label_suffix}: {ref_str}")
+            st.info(f"Basis-Zeit {label}: {str(timedelta(seconds=int(now_sec)))} — Update: {datetime.now().strftime('%H:%M:%S')}")
             
             disp = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c in auf_strecke.columns]
             st.dataframe(auf_strecke.sort_values('Sort_Min', ascending=False)[disp], use_container_width=True, hide_index=True)
@@ -123,9 +130,10 @@ st.set_page_config(page_title="Race Monitor Pro", layout="wide")
 apply_custom_design()
 all_events = load_events()
 
-# Zeit-Modus in der Sidebar
+# Sidebar Einstellungen
 st.sidebar.title("Einstellungen")
-t_mode = st.sidebar.radio("Zeit-Referenz", ["Simulation (Letzter Finisher)", "Live-Uhrzeit (System)"])
+t_mode = st.sidebar.radio("Zeit-Referenz", ["Live-Uhrzeit (System)", "Simulation (Letzter Finisher)"])
+sync_interval = st.sidebar.slider("Synchronisations-Intervall (s)", 5, 300, 10)
 
 p_event = st.query_params.get("event")
 
@@ -134,15 +142,16 @@ if p_event:
     ev = next((e for e in all_events if e['name'] == p_event), None)
     if ev:
         try:
-            r = requests.get(ev['url'], timeout=10).json()
+            r = fetch_race_data(ev['url'])
             df = pd.DataFrame(r['data'], columns=r.get('columns', [])) if 'data' in r else pd.DataFrame(r)
             df.columns = [str(c).strip() for c in df.columns]
             c_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
             if c_col:
                 for c in df[c_col].unique(): render_competition(df[df[c_col] == c], str(c), t_mode)
             else: render_competition(df, ev['name'], t_mode)
-            time.sleep(5); st.rerun()
-        except: st.error("Ladefehler.")
+            time.sleep(sync_interval)
+            st.rerun()
+        except Exception as e: st.error(f"Ladefehler: {e}")
 else:
     mode = st.sidebar.radio("Navigation", ["📊 Dashboard", "⚙️ API Verwaltung"])
     if mode == "⚙️ API Verwaltung":
@@ -162,12 +171,13 @@ else:
             sel = st.selectbox("Event wählen", [e['name'] for e in all_events])
             ev = next(e for e in all_events if e['name'] == sel)
             try:
-                r = requests.get(ev['url'], timeout=10).json()
+                r = fetch_race_data(ev['url'])
                 df = pd.DataFrame(r['data'], columns=r.get('columns', [])) if 'data' in r else pd.DataFrame(r)
                 df.columns = [str(c).strip() for c in df.columns]
                 c_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
                 if c_col:
-                    for c in df[c_col].unique(): render_competition(df[df[c_col] == c], str(c), t_mode)
+                    for c in df[comp_col].unique(): render_competition(df[df[c_col] == c], str(c), t_mode)
                 else: render_competition(df, ev['name'], t_mode)
-                time.sleep(5); st.rerun()
-            except: st.error("Fehler.")
+                time.sleep(sync_interval)
+                st.rerun()
+            except Exception as e: st.error(f"Ladefehler: {e}")
