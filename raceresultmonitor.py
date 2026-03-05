@@ -55,8 +55,9 @@ def fetch_race_data(url):
 def render_competition(df, comp_name, time_mode):
     df.columns = [str(c).strip() for c in df.columns]
     
-    bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr']), "Bib")
-    name_col = next((c for c in df.columns if any(k in c.lower() for k in ['name', 'nachname', 'vorname'])), "Name")
+    # Robuste Spaltensuche
+    bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr', 'snr', 'nr']), "Bib")
+    name_col = next((c for c in df.columns if any(k in c.lower() for k in ['name', 'nachname', 'vorname', 'teilnehmer'])), None)
     start_col = next((c for c in df.columns if c.lower() == 'start' or 'startzeit' in c.lower()), None)
     goal_col = next((c for c in df.columns if c.lower() == 'ziel' or 'finish' in c.lower()), None)
     status_col = next((c for c in df.columns if 'status' in c.lower()), None)
@@ -76,15 +77,14 @@ def render_competition(df, comp_name, time_mode):
         
         if time_mode == "Simulation (Letzter Finisher)" and not im_ziel.empty:
             now_sec = im_ziel[f'{goal_col}_sec'].max()
-            label = "Simuliert (Letzter Finisher)"
+            label = "Simuliert"
         else:
             now_sec = now_local.hour * 3600 + now_local.minute * 60 + now_local.second
-            label = "Echtzeit (lokal)"
+            label = "Echtzeit"
 
-        st.markdown('<div class="comp-container">', unsafe_allow_html=True)
+        # --- AB HIER: REINES STREAMLIT DESIGN OHNE HTML-DIVS ---
         st.subheader(f"🏆 {comp_name}")
 
-        # Fortschritts-Zustände
         total_gestartet = len(auf_strecke) + len(im_ziel)
         
         if total_gestartet == 0:
@@ -95,6 +95,7 @@ def render_competition(df, comp_name, time_mode):
             st.write(f"Fortschritt: {len(im_ziel)} von {total_gestartet} im Ziel ({noch_fehlend} fehlen noch)")
             st.progress(progress_val)
 
+            # Sicherheits-Analyse
             sector_averages = {}
             for i in range(len(ordered_times) - 1):
                 col_a, col_b = ordered_times[i], ordered_times[i+1]
@@ -123,20 +124,21 @@ def render_competition(df, comp_name, time_mode):
             res = auf_strecke.apply(analyze_safety, axis=1)
             auf_strecke = pd.concat([auf_strecke, res], axis=1)
             
-            # LINKSBÜNDIG-FIX: Startnummer zu Text konvertieren
+            # Startnummer linksbündig & Sortierung
             auf_strecke[bib_col] = auf_strecke[bib_col].astype(str)
-            
-            # Sortierung
             auf_strecke_sorted = auf_strecke.sort_values(by=['Is_Overdue', 'Sort_Min'], ascending=[False, False])
             
             st.info(f"Basis-Zeit {label}: {str(timedelta(seconds=int(now_sec)))} — Update: {now_local.strftime('%H:%M:%S')}")
             
-            disp = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c in auf_strecke_sorted.columns]
-            st.dataframe(auf_strecke_sorted[disp], use_container_width=True, hide_index=True)
+            disp_cols = [bib_col]
+            if name_col: disp_cols.append(name_col)
+            disp_cols += ['Letzter Kontakt', 'Sicherheits-Status']
+            
+            st.dataframe(auf_strecke_sorted[disp_cols], use_container_width=True, hide_index=True)
+            st.divider() # Trennlinie statt weißem Kasten
         else:
             st.success("Alle Teilnehmer im Ziel.")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+            st.divider()
 
 # --- APP FLOW ---
 st.set_page_config(page_title="Race Monitor Pro", layout="wide")
