@@ -25,8 +25,10 @@ def apply_custom_design():
     st.markdown("""
         <style>
         /* Hintergrund und Schrift */
-        .main { background-color: #f4f7f9; }
-        h1, h2, h3 { color: #003366; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-weight: 700; }
+        .stApp { background-color: #f4f7f9 !important; }
+        
+        /* Überschriften-Farbe fixieren */
+        h1, h2, h3 { color: #003366 !important; font-family: 'Segoe UI', Roboto, sans-serif; }
         
         /* Sidebar Design */
         [data-testid="stSidebar"] { background-color: #003366; color: white; }
@@ -34,31 +36,26 @@ def apply_custom_design():
         
         /* Cards für Wettbewerbe */
         .comp-card {
-            background-color: white;
-            padding: 20px;
+            background-color: white !important;
+            padding: 25px;
             border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
             margin-bottom: 25px;
-            border-left: 5px solid #003366;
+            border-left: 8px solid #003366;
+            color: #31333F;
         }
-        
-        /* Badge-System für Status */
-        .status-badge {
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-size: 0.85em;
-            font-weight: bold;
+
+        /* Verhindert, dass Streamlit-Inhalte die Card überlagern */
+        .comp-card h3 {
+            margin-top: 0 !important;
+            margin-bottom: 15px !important;
         }
-        .overdue { background-color: #ffebee; color: #c62828; border: 1px solid #c62828; }
-        .normal { background-color: #e3f2fd; color: #1565c0; border: 1px solid #1565c0; }
         
         /* Streamlit Elemente anpassen */
         .stButton>button {
             background-color: #003366;
             color: white;
             border-radius: 4px;
-            border: none;
-            padding: 0.5rem 1rem;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -87,23 +84,34 @@ def render_competition(df, comp_name):
     ordered_times = [c for c in df.columns if any(k in c.lower() for k in time_keywords) and c != goal_col] + [goal_col]
 
     if start_col and goal_col:
-        # Zeit-Spalten konvertieren
         for col in ordered_times: df[f'{col}_sec'] = df[col].apply(time_to_seconds)
         
         df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy() if status_col else df.copy()
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
 
-        # REFERENZ-ZEIT Logik (Fix für alte Events)
+        # REFERENZ-ZEIT Logik
         if not im_ziel.empty:
             now_sec = im_ziel[f'{goal_col}_sec'].max()
         else:
             now = datetime.now()
             now_sec = now.hour * 3600 + now.minute * 60 + now.second
 
-        # Card-Container Start
-        st.markdown(f'<div class="comp-card">', unsafe_allow_html=True)
-        st.subheader(f"🏆 {comp_name}")
+        # Card-Container Start (HTML)
+        # Wir rendern die Überschrift direkt in den Container
+        st.markdown(f'''
+            <div class="comp-card">
+                <h3>🏆 {comp_name}</h3>
+        ''', unsafe_allow_html=True)
+
+        # Fortschrittsbalken Logik
+        total_started = len(auf_strecke) + len(im_ziel)
+        if total_started > 0:
+            progress_val = len(im_ziel) / total_started
+            st.write(f"**Gesamtfortschritt: {len(im_ziel)} von {total_started} Teilnehmern im Ziel**")
+            st.progress(progress_val)
+        
+        st.markdown("<br>", unsafe_allow_html=True)
 
         if not auf_strecke.empty:
             # Sektor-Averages
@@ -154,8 +162,12 @@ if public_event_name:
     if ev:
         try:
             res = requests.get(ev['url'], timeout=10).json()
-            df = pd.DataFrame(res['data'], columns=res.get('columns', [])) if 'data' in res else pd.DataFrame(res)
-            comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz']), None)
+            if isinstance(res, dict) and 'data' in res:
+                df = pd.DataFrame(res['data'], columns=res.get('columns', []))
+            else:
+                df = pd.DataFrame(res)
+            
+            comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
             if comp_col:
                 for c in df[comp_col].unique(): render_competition(df[df[comp_col] == c], str(c))
             else: render_competition(df, ev['name'])
@@ -178,11 +190,20 @@ else:
         if not all_events: st.info("Bitte Event anlegen.")
         else:
             sel = st.selectbox("Event wählen", [e['name'] for e in all_events])
-            # Hier dieselbe Render-Logik wie oben (aus Platzgründen verkürzt)
             ev = next(e for e in all_events if e['name'] == sel)
             try:
                 res = requests.get(ev['url'], timeout=10).json()
-                df = pd.DataFrame(res['data'], columns=res.get('columns', [])) if 'data' in res else pd.DataFrame(res)
-                for c in (df[next(col for col in df.columns if col.lower() in ['wettbewerb', 'event']), None].unique() if 'wettbewerb' in str(df.columns).lower() else [ev['name']]):
-                    render_competition(df, str(c))
-            except: st.warning("Fehler beim Laden.")
+                if isinstance(res, dict) and 'data' in res:
+                    df = pd.DataFrame(res['data'], columns=res.get('columns', []))
+                else:
+                    df = pd.DataFrame(res)
+                
+                comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
+                if comp_col:
+                    for c in df[comp_col].unique():
+                        render_competition(df[df[comp_col] == c], str(c))
+                else:
+                    render_competition(df, ev['name'])
+                
+                time.sleep(30); st.rerun()
+            except Exception as e: st.error(f"Fehler beim Laden: {e}")
