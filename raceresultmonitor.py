@@ -141,7 +141,7 @@ if p_event:
             if c_col:
                 for c in df[c_col].unique(): render_competition(df[df[c_col] == c], str(c), t_mode)
             else: render_competition(df, ev['name'], t_mode)
-            time.sleep(30); st.rerun()
+            time.sleep(5); st.rerun()
         except: st.error("Ladefehler.")
 else:
     mode = st.sidebar.radio("Navigation", ["📊 Dashboard", "⚙️ API Verwaltung"])
@@ -169,5 +169,5 @@ else:
                 if c_col:
                     for c in df[c_col].unique(): render_competition(df[df[c_col] == c], str(c), t_mode)
                 else: render_competition(df, ev['name'], t_mode)
-                time.sleep(30); st.rerun()
+                time.sleep(5); st.rerun()
             except: st.error("Fehler.")
