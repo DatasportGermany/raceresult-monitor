@@ -87,12 +87,35 @@ def render_competition(df, comp_name):
             auf_strecke['Last_Time_Sec'] = auf_strecke[split_cols_sec].max(axis=1)
             
             # ETA Berechnung (wenn Finisher da sind)
-            if not im_ziel.empty:
-                avg_total_time = (im_ziel[f'{goal_col}_sec'] - im_ziel[f'{start_col}_sec']).mean()
-                # Prognose: Aktuelle Zeit + geschätzte Restzeit
-                auf_strecke['ETA_Sec'] = auf_strecke['Last_Time_Sec'] + (avg_total_time - (auf_strecke['Last_Time_Sec'] - auf_strecke[f'{start_col}_sec']))
-            else:
-                auf_strecke['ETA_Sec'] = 0
+            iif not im_ziel.empty:
+                    # Histogramm-Erstellung
+                    # Wir berechnen die Uhrzeit-Labels für die Balken
+                    def format_eta(x):
+                        if x > 0:
+                            return (datetime(2026, 1, 1) + timedelta(seconds=int(x))).strftime("%H:%M")
+                        return "N/A"
+
+                    auf_strecke['ETA_Bin'] = auf_strecke['ETA_Sec'].apply(format_eta)
+                    
+                    # Nur gültige Zeiten für das Diagramm nehmen
+                    valid_eta = auf_strecke[auf_strecke['ETA_Bin'] != "N/A"]
+                    
+                    if not valid_eta.empty:
+                        eta_counts = valid_eta.groupby('ETA_Bin').size().reset_index(name='Anzahl')
+                        
+                        fig = go.Figure(go.Bar(
+                            x=eta_counts['ETA_Bin'], 
+                            y=eta_counts['Anzahl'], 
+                            marker_color='#FFA500'
+                        ))
+                        fig.update_layout(
+                            title="Ankunfts-Welle (Split-basiert)", 
+                            height=350, 
+                            margin=dict(l=0, r=0, t=40, b=0)
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Prognose startet, sobald der erste Finisher eintrifft.")
 
             # --- UI LAYOUT ---
             col_t, col_g = st.columns([1, 1])
