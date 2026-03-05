@@ -46,77 +46,82 @@ def is_empty(val):
 def render_competition(df, comp_name):
     df.columns = [str(c).strip() for c in df.columns]
     
+    # 1. Spalten identifizieren
     bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr']), "Startnummer")
     name_col = next((c for c in df.columns if 'name' in c.lower()), "Name")
     start_col = next((c for c in df.columns if c.lower() == 'start' or 'startzeit' in c.lower()), None)
     goal_col = next((c for c in df.columns if c.lower() == 'ziel' or 'finish' in c.lower()), None)
-    status_col = next((c for c in df.columns if 'status' in c.lower()), "Status")
+    
+    # Liste aller Zeit-Spalten (Start, Ziel und alles dazwischen wie KM5, KM10...)
+    # Wir nehmen an, dass Zeit-Spalten HH:MM:SS Formate haben
+    time_cols = [c for c in df.columns if any(k in c.lower() for k in ['start', 'ziel', 'km', 'mess', 'split', 'finish'])]
 
     if start_col and goal_col:
-        df['S_Sec'] = df[start_col].apply(time_to_seconds)
-        df['G_Sec'] = df[goal_col].apply(time_to_seconds)
+        # Konvertierung aller Zeitspalten in Sekunden für Berechnungen
+        for col in time_cols:
+            df[f'{col}_sec'] = df[col].apply(time_to_seconds)
         
-        # Status Filter
-        if status_col in df.columns:
-            df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy()
-        else:
-            df_reg = df.copy()
+        df_reg = df[df['Status'].astype(str).str.strip() == "0"].copy() if 'Status' in df.columns else df.copy()
 
-        auf_strecke = df_reg[(df_reg['S_Sec'] > 0) & (df_reg[goal_col].apply(is_empty))].copy()
-        im_ziel = df_reg[(df_reg['S_Sec'] > 0) & (~df_reg[goal_col].apply(is_empty))].copy()
+        # Wer ist im Ziel?
+        im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
+        # Wer ist auf der Strecke? (Gestartet, aber Ziel leer)
+        auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         
         st.subheader(f"🏆 {comp_name}")
         
-        col_stats, col_graph = st.columns([1, 1])
-
-        with col_stats:
-            if not auf_strecke.empty:
-                st.warning(f"🔔 {len(auf_strecke)} Teilnehmer auf der Strecke")
-                total = len(im_ziel) + len(auf_strecke)
-                st.progress(len(im_ziel) / total)
+        if not auf_strecke.empty:
+            # --- DYNAMISCHE PROGNOSE-LOGIK ---
+            # Wir suchen für jeden Läufer den letzten Messpunkt (Maximum der Zeit-Sekunden außer Ziel)
+            intermediate_cols_sec = [f'{c}_sec' for c in time_cols if c != goal_col]
+            auf_strecke['Last_Time_Sec'] = auf_strecke[intermediate_cols_sec].max(axis=1)
+            
+            # Durchschnittliche Gesamtdauer der Finisher als Referenz
+            if not im_ziel.empty:
+                avg_total_time = (im_ziel[f'{goal_col}_sec'] - im_ziel[f'{start_col}_sec']).mean()
                 
-                disp = [c for c in [bib_col, name_col, start_col] if c in df_reg.columns]
-                st.dataframe(auf_strecke[disp], use_container_width=True, hide_index=True, height=300)
+                # Wir berechnen die ETA: Last_Time + (Durchschnittliche Restzeit)
+                # Die Restzeit gewichten wir: (Gesamtzeit - Zeit bis zu diesem Punkt)
+                # Da wir ohne Distanzen arbeiten, nehmen wir die verbleibende Durchschnittsdauer
+                avg_start_time = im_ziel[f'{start_col}_sec'].mean()
+                
+                # Prognose: Aktuelle Zeit + (Durchschnittliche Dauer - bisherige Dauer)
+                # Das korrigiert die ETA, je weiter der Läufer fortgeschritten ist
+                auf_strecke['ETA_Sec'] = auf_strecke['Last_Time_Sec'] + (avg_total_time - (auf_strecke['Last_Time_Sec'] - auf_strecke[f'{start_col}_sec']))
             else:
-                st.success("✅ Alle Teilnehmer im Ziel.")
+                st.info("Warte auf erste Finisher für ETA-Berechnung...")
+                auf_strecke['ETA_Sec'] = 0
 
-        with col_graph:
-            # --- PROGNOSE LOGIK ---
-            if not auf_strecke.empty and not im_ziel.empty:
-                # Durchschnittliche Nettozeit der Finisher berechnen
-                avg_netto = (im_ziel['G_Sec'] - im_ziel['S_Sec']).mean()
-                
-                # Erwartete Zielzeit für Läufer auf der Strecke (Start + Durchschnitt)
-                auf_strecke['ETA_Sec'] = auf_strecke['S_Sec'] + avg_netto
-                
-                # In Uhrzeit-Intervalle gruppieren (alle 10 Min)
-                def get_time_bin(s):
-                    dt = datetime(2026, 1, 1) + timedelta(seconds=int(s))
-                    # Runden auf 10 Minuten
-                    discard = timedelta(minutes=dt.minute % 10, seconds=dt.second, microseconds=dt.microsecond)
-                    dt -= discard
-                    return dt.strftime("%H:%M")
+            # --- UI LAYOUT ---
+            col_table, col_chart = st.columns([1, 1])
+            
+            with col_table:
+                st.warning(f"🔔 {len(auf_strecke)} Teilnehmer auf der Strecke")
+                # Spalte hinzufügen: Wo wurde der Läufer zuletzt gesehen?
+                def get_last_point(row):
+                    last_col = ""
+                    max_sec = 0
+                    for c in time_cols:
+                        if c != goal_col and row[f'{c}_sec'] > max_sec:
+                            max_sec = row[f'{c}_sec']
+                            last_col = c
+                    return last_col
 
-                auf_strecke['ETA_Bin'] = auf_strecke['ETA_Sec'].apply(get_time_bin)
-                eta_counts = auf_strecke.groupby('ETA_Bin').size().reset_index(name='Anzahl')
+                auf_strecke['Letzter Kontakt'] = auf_strecke.apply(get_last_point, axis=1)
+                disp_cols = [bib_col, name_col, 'Letzter Kontakt']
+                st.dataframe(auf_strecke[disp_cols], use_container_width=True, hide_index=True)
 
-                # Plotly Chart
-                fig = go.Figure(go.Bar(
-                    x=eta_counts['ETA_Bin'],
-                    y=eta_counts['Anzahl'],
-                    marker_color='#1f77b4',
-                    hovertemplate='Zeit: %{x}<br>Erwartet: %{y} Pers.<extra></extra>'
-                ))
-                fig.update_layout(
-                    title="Ankunfts-Prognose (Wann kommen die Leute?)",
-                    xaxis_title="Erwartete Uhrzeit",
-                    yaxis_title="Anzahl Personen",
-                    height=350,
-                    margin=dict(t=40, b=0, l=0, r=0)
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            elif not auf_strecke.empty:
-                st.info("Sammle erste Finisher-Daten für die Prognose...")
+            with col_chart:
+                if not im_ziel.empty and 'ETA_Sec' in auf_strecke:
+                    # Histogramm wie zuvor
+                    auf_strecke['ETA_Bin'] = auf_strecke['ETA_Sec'].apply(lambda x: (datetime(2026,1,1) + timedelta(seconds=int(x))).strftime("%H:%M") if x > 0 else "Unbekannt")
+                    eta_counts = auf_strecke[auf_strecke['ETA_Bin'] != "Unbekannt"].groupby('ETA_Bin').size().reset_index(name='Anzahl')
+                    
+                    fig = go.Figure(go.Bar(x=eta_counts['ETA_Bin'], y=eta_counts['Anzahl'], marker_color='#ff8c00'))
+                    fig.update_layout(title="Dynamische Ankunfts-Welle (basiert auf Splits)", height=350)
+                    st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.success("✅ Alle Teilnehmer im Ziel.")
 
 def run_dashboard(event_obj):
     refresh_rate = 30
