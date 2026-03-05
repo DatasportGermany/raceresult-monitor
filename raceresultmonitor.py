@@ -4,7 +4,7 @@ import requests
 import time
 
 # --- SEITEN-KONFIGURATION ---
-st.set_page_config(page_title="Race Monitor - Safety Track", layout="wide")
+st.set_page_config(page_title="Datasport - Wettbewerbs-Überblick", layout="wide")
 
 # --- HELPER FUNKTIONEN ---
 def time_to_seconds(t_str):
