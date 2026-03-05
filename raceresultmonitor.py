@@ -71,8 +71,6 @@ def render_competition(df, comp_name, time_mode):
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
 
-        # ZEIT-LOGIK MIT UTC+1 FIX
-        # Wir addieren 1 Stunde für die deutsche Zeit (MEZ)
         now_local = datetime.utcnow() + timedelta(hours=1) 
         
         if time_mode == "Simulation (Letzter Finisher)" and not im_ziel.empty:
@@ -85,13 +83,10 @@ def render_competition(df, comp_name, time_mode):
         st.markdown('<div class="comp-container">', unsafe_allow_html=True)
         st.subheader(f"🏆 {comp_name}")
 
-        # Fortschrittsbalken mit "Noch fehlend"-Anzeige
         total_started = len(auf_strecke) + len(im_ziel)
         if total_started > 0:
             noch_fehlend = len(auf_strecke)
             progress_val = len(im_ziel) / total_started
-            
-            # Die neue Zeile mit der gewünschten Klammer-Anzeige
             st.write(f"Fortschritt: {len(im_ziel)} von {total_started} im Ziel ({noch_fehlend} fehlen noch)")
             st.progress(progress_val)
 
@@ -102,7 +97,8 @@ def render_competition(df, comp_name, time_mode):
                 fin = df_reg[(df_reg[f'{col_a}_sec'] > 0) & (df_reg[f'{col_b}_sec'] > 0)]
                 if not fin.empty: sector_averages[col_a] = (fin[f'{col_b}_sec'] - fin[f'{col_a}_sec']).mean()
 
-          def analyze_safety(row):
+            # --- DIESER BLOCK WURDE KORRIGIERT ---
+            def analyze_safety(row):
                 lp, ls = start_col, row[f'{start_col}_sec']
                 for c in ordered_times:
                     if c != goal_col and row[f'{c}_sec'] > 0:
@@ -114,34 +110,22 @@ def render_competition(df, comp_name, time_mode):
                 
                 status = f"{int(diff_m)}m (Schnitt: {int(avg_m)}m)"
                 if is_overdue: status = "🚩 OVERDUE: " + status
-                
                 return pd.Series({
                     'Letzter Kontakt': lp, 
                     'Sicherheits-Status': status, 
                     'Sort_Min': diff_m,
-                    'Is_Overdue': 1 if is_overdue else 0  # Hilfsspalte für Sortierung
+                    'Is_Overdue': 1 if is_overdue else 0
                 })
 
             res = auf_strecke.apply(analyze_safety, axis=1)
             auf_strecke = pd.concat([auf_strecke, res], axis=1)
             
-            # Sortierung: Zuerst nach Flagge (1 > 0), dann nach Minuten
-            auf_strecke_sorted = auf_strecke.sort_values(
-                by=['Is_Overdue', 'Sort_Min'], 
-                ascending=[False, False]
-            )
+            auf_strecke_sorted = auf_strecke.sort_values(by=['Is_Overdue', 'Sort_Min'], ascending=[False, False])
             
-            ref_str = str(timedelta(seconds=int(now_sec)))
-            st.info(f"Basis-Zeit {label}: {ref_str} — Update: {now_local.strftime('%H:%M:%S')}")
+            st.info(f"Basis-Zeit {label}: {str(timedelta(seconds=int(now_sec)))} — Update: {now_local.strftime('%H:%M:%S')}")
             
             disp = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c in auf_strecke_sorted.columns]
             st.dataframe(auf_strecke_sorted[disp], use_container_width=True, hide_index=True)
-            
-            # Anzeige der korrekten Lokalzeit
-            st.info(f"Basis-Zeit {label}: {str(timedelta(seconds=int(now_sec)))} — Letztes Update: {now_local.strftime('%H:%M:%S')}")
-            
-            disp = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c in auf_strecke.columns]
-            st.dataframe(auf_strecke.sort_values('Sort_Min', ascending=False)[disp], use_container_width=True, hide_index=True)
         else:
             st.success("Alle Teilnehmer im Ziel.")
         
