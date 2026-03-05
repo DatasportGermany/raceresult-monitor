@@ -5,7 +5,6 @@ import time
 import urllib.parse
 import json
 import os
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 # --- DATEI-PFAD FÜR SPEICHERUNG ---
@@ -25,7 +24,7 @@ def save_events(events):
         json.dump(events, f)
 
 # --- SEITEN-KONFIGURATION ---
-st.set_page_config(page_title="Race Monitor Pro + Predictor", layout="wide")
+st.set_page_config(page_title="Race Safety Monitor", layout="wide")
 
 # --- ZEIT-HELPER ---
 def time_to_seconds(t_str):
@@ -38,13 +37,9 @@ def time_to_seconds(t_str):
         return 0
     except: return 0
 
-def is_empty(val):
-    v = str(val).strip().lower()
-    return v in ["", "none", "nan", "0", "00:00:00"]
-
 # --- RENDER LOGIK ---
 def render_competition(df, comp_name):
-    """Dynamische Analyse mit Zwischenzeiten (Splits)"""
+    """Sicherheits-Analyse: Wer ist wie lange überfällig?"""
     df.columns = [str(c).strip() for c in df.columns]
     
     bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr']), None)
@@ -57,86 +52,73 @@ def render_competition(df, comp_name):
     split_cols = [c for c in df.columns if any(k in c.lower() for k in time_keywords) and c != goal_col]
 
     if start_col and goal_col:
+        # Aktuelle Uhrzeit in Sekunden seit Tagesbeginn für Überfällig-Check
+        now = datetime.now()
+        now_sec = now.hour * 3600 + now.minute * 60 + now.second
+
         for col in split_cols + [goal_col]:
             df[f'{col}_sec'] = df[col].apply(time_to_seconds)
         
         df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy() if status_col else df.copy()
 
-        im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         
         st.subheader(f"🏆 {comp_name}")
         
         if not auf_strecke.empty:
-            # --- ETA LOGIK ---
+            # --- SICHERHEITS-LOGIK (ÜBERFÄLLIG) ---
             split_cols_sec = [f'{c}_sec' for c in split_cols]
             auf_strecke['Last_Time_Sec'] = auf_strecke[split_cols_sec].max(axis=1)
             
-            if not im_ziel.empty:
-                avg_total_time = (im_ziel[f'{goal_col}_sec'] - im_ziel[f'{start_col}_sec']).mean()
-                auf_strecke['ETA_Sec'] = auf_strecke['Last_Time_Sec'] + (avg_total_time - (auf_strecke['Last_Time_Sec'] - auf_strecke[f'{start_col}_sec']))
-            else:
-                auf_strecke['ETA_Sec'] = 0
-
-            # --- UI LAYOUT ---
-            col_t, col_g = st.columns([1, 1])
+            # Berechnung: Wie viele Minuten seit letztem Kontakt vergangen?
+            auf_strecke['Seit_Kontakt_Min'] = (now_sec - auf_strecke['Last_Time_Sec']) / 60
             
-            with col_t:
-                st.warning(f"🔔 {len(auf_strecke)} Teilnehmer auf der Strecke")
-                
-                def get_last_point_name(row):
-                    best_col = start_col
-                    max_s = 0
-                    for c in split_cols:
-                        if row[f'{c}_sec'] > max_s:
-                            max_s = row[f'{c}_sec']
-                            best_col = c
-                    return best_col
+            def get_last_point_name(row):
+                best_col = start_col
+                max_s = 0
+                for c in split_cols:
+                    if row[f'{c}_sec'] > max_s:
+                        max_s = row[f'{c}_sec']
+                        best_col = c
+                return best_col
 
-                auf_strecke['Letzter Messpunkt'] = auf_strecke.apply(get_last_point_name, axis=1)
-                display_list = [c for c in [bib_col, name_col, 'Letzter Messpunkt'] if c is not None]
-                st.dataframe(auf_strecke[display_list], use_container_width=True, hide_index=True)
+            auf_strecke['Letzter Kontakt'] = auf_strecke.apply(get_last_point_name, axis=1)
+            
+            # Status-Text mit Warn-Flagge bei > 30 Min
+            def format_overdue(min_val):
+                if min_val < 0: return "Zeitfehler (Zukunft)"
+                if min_val > 30: return f"🚩 {int(min_val)} Min überfällig"
+                return f"{int(min_val)} Min unterwegs"
 
-            with col_g:
-                if not im_ziel.empty:
-                    def format_eta(x):
-                        if x > 0:
-                            return (datetime(2026, 1, 1) + timedelta(seconds=int(x))).strftime("%H:%M")
-                        return "N/A"
-
-                    auf_strecke['ETA_Bin'] = auf_strecke['ETA_Sec'].apply(format_eta)
-                    valid_eta = auf_strecke[auf_strecke['ETA_Bin'] != "N/A"]
-                    
-                    if not valid_eta.empty:
-                        eta_counts = valid_eta.groupby('ETA_Bin').size().reset_index(name='Anzahl')
-                        fig = go.Figure(go.Bar(x=eta_counts['ETA_Bin'], y=eta_counts['Anzahl'], marker_color='#FFA500'))
-                        fig.update_layout(title="Ankunfts-Welle (Split-basiert)", height=350, margin=dict(l=0, r=0, t=40, b=0))
-                        st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("Prognose startet, sobald der erste Finisher eintrifft.")
+            auf_strecke['Status / Überfällig'] = auf_strecke['Seit_Kontakt_Min'].apply(format_overdue)
+            
+            # Anzeige-Tabelle
+            display_list = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Status / Überfällig'] if c is not None]
+            st.warning(f"⚠️ {len(auf_strecke)} Teilnehmer auf der Strecke")
+            st.dataframe(
+                auf_strecke[display_list].sort_values(by='Seit_Kontakt_Min', ascending=False), 
+                use_container_width=True, 
+                hide_index=True
+            )
         else:
-            st.success("✅ Alle Teilnehmer im Ziel.")
+            st.success("✅ Alle Teilnehmer im Ziel oder noch nicht gestartet.")
     else:
-        st.error(f"Spaltenfehler in '{comp_name}'.")
+        st.error(f"Spaltenfehler: Start oder Ziel nicht erkannt.")
 
-# --- DASHBOARD LOGIK ---
+# --- DASHBOARD & NAVIGATION ---
 def run_dashboard(event_obj):
-    refresh_rate = 30
     if not st.query_params.get("event"):
         refresh_rate = st.sidebar.slider("Auto-Refresh (s)", 10, 300, 30)
+    else:
+        refresh_rate = 30
 
     try:
         res = requests.get(event_obj['url'], timeout=10)
         json_data = res.json()
+        df = pd.DataFrame(json_data['data'], columns=json_data.get('columns', [])) if 'data' in json_data else pd.DataFrame(json_data)
         
-        if isinstance(json_data, dict) and 'data' in json_data:
-            df = pd.DataFrame(json_data['data'], columns=json_data.get('columns', []))
-        elif isinstance(json_data, list):
-            df = pd.DataFrame(json_data)
-        else: return
-
         df.columns = [str(c).strip() for c in df.columns]
-        comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
+        comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz']), None)
         
         if comp_col:
             for comp in df[comp_col].unique():
@@ -148,20 +130,18 @@ def run_dashboard(event_obj):
         time.sleep(refresh_rate)
         st.rerun()
     except Exception as e:
-        st.error(f"Fehler beim Laden: {e}")
+        st.error(f"Fehler: {e}")
 
-# --- APP FLOW ---
 all_events = load_events()
 public_event_name = st.query_params.get("event")
 
 if public_event_name:
-    st.title(f"📊 Live-Monitor: {public_event_name}")
+    st.title(f"🚨 Safety Monitor: {public_event_name}")
     selected_event = next((e for e in all_events if e['name'] == public_event_name), None)
     if selected_event: run_dashboard(selected_event)
     else: st.error("Event nicht gefunden.")
 else:
     mode = st.sidebar.radio("Navigation", ["📊 Dashboard", "⚙️ API Verwaltung"])
-
     if mode == "⚙️ API Verwaltung":
         st.title("⚙️ API Verwaltung")
         with st.form("new_event", clear_on_submit=True):
@@ -169,9 +149,7 @@ else:
             u = st.text_input("RaceResult URL (JSON)")
             if st.form_submit_button("Hinzufügen"):
                 all_events.append({"name": n, "url": u})
-                save_events(all_events)
-                st.rerun()
-
+                save_events(all_events); st.rerun()
         for i, ev in enumerate(all_events):
             c1, c2 = st.columns([4, 1])
             share_url = f"/?event={urllib.parse.quote(ev['name'])}"
@@ -179,7 +157,6 @@ else:
             c1.code(share_url, language="text")
             if c2.button("Löschen", key=f"del_{i}"):
                 all_events.pop(i); save_events(all_events); st.rerun()
-
     elif mode == "📊 Dashboard":
         if not all_events: st.info("Keine Events angelegt.")
         else:
