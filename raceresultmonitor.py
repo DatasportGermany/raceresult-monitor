@@ -2,14 +2,14 @@ import streamlit as st
 import pandas as pd
 import requests
 import time
+import urllib.parse
 
 # --- SEITEN-KONFIGURATION ---
 st.set_page_config(page_title="Race Monitor Pro", layout="wide")
 
 # --- URL PARAMETER LOGIK (Public Mode) ---
-# Prüfen, ob ein Event-Name in der URL übergeben wurde (z.B. ?event=Trollinger)
-query_params = st.query_params
-public_event = query_params.get("event")
+# Holt Parameter aus der URL (z.B. ?event=Trollinger)
+public_event = st.query_params.get("event")
 
 # --- HELPER FUNKTIONEN ---
 def time_to_seconds(t_str):
@@ -37,7 +37,12 @@ def render_competition(df, comp_name):
     if start_col and goal_col:
         df['S_Sec'] = df[start_col].apply(time_to_seconds)
         df['G_Sec'] = df[goal_col].apply(time_to_seconds)
-        df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy()
+        
+        # Status Filter (Status 0 = OK)
+        if status_col in df.columns:
+            df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy()
+        else:
+            df_reg = df.copy()
 
         auf_strecke = df_reg[(df_reg['S_Sec'] > 0) & (df_reg[goal_col].apply(is_empty))]
         im_ziel = df_reg[(df_reg['S_Sec'] > 0) & (~df_reg[goal_col].apply(is_empty))]
@@ -52,93 +57,89 @@ def render_competition(df, comp_name):
             else:
                 if not im_ziel.empty: st.success(f"✅ Alle {len(im_ziel)} Teilnehmer im Ziel.")
                 else: st.info("Warten auf Starts...")
+    else:
+        st.error(f"Spaltenfehler in '{comp_name}'.")
 
-# --- EVENT SPEICHER (In einer echten App wäre hier eine DB besser) ---
+# --- EVENT SPEICHER ---
 if 'event_store' not in st.session_state:
-    # Beispiel-Daten zur Demonstration (hier deine echten URLs eintragen oder über Admin-Mode zufügen)
     st.session_state.event_store = []
 
-# --- NAVIGATION & VIEW LOGIK ---
+# --- DASHBOARD LOGIK (Zentralisiert) ---
+def run_dashboard(event_obj):
+    if not event_obj:
+        st.error("Event-Daten nicht gefunden.")
+        return
+
+    # Sidebar nur im Admin-Mode (wenn kein public_event aktiv ist)
+    refresh_rate = 30
+    if not public_event:
+        refresh_rate = st.sidebar.slider("Auto-Refresh (Sekunden)", 10, 300, 30)
+
+    try:
+        res = requests.get(event_obj['url'], timeout=10)
+        data = res.json()
+        if isinstance(data, dict) and 'data' in data:
+            df = pd.DataFrame(data['data'], columns=data.get('columns', []))
+        else:
+            df = pd.DataFrame(data)
+        
+        comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz']), None)
+        
+        if comp_col:
+            for comp in df[comp_col].unique():
+                render_competition(df[df[comp_col] == comp], str(comp))
+        else:
+            render_competition(df, event_obj['name'])
+            
+        time.sleep(refresh_rate)
+        st.rerun()
+    except Exception as e:
+        st.error(f"Fehler beim Laden: {e}")
+
+# --- NAVIGATION ---
 if public_event:
-    # PUBLIC MODE: Nur das Dashboard anzeigen, keine Sidebar
+    # --- PUBLIC MODE ---
     st.title(f"📊 Live-Monitor: {public_event}")
     selected_event = next((e for e in st.session_state.event_store if e['name'] == public_event), None)
-    
     if selected_event:
-        try:
-            res = requests.get(selected_event['url'], timeout=10)
-            df = pd.DataFrame(res.json()['data'], columns=res.json().get('columns', []))
-            comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz']), None)
-            if comp_col:
-                for comp in df[comp_col].unique(): render_competition(df[df[comp_col] == comp], str(comp))
-            else: render_competition(df, public_event)
-            time.sleep(30)
-            st.rerun()
-        except: st.error("Event-Daten konnten nicht geladen werden.")
+        run_dashboard(selected_event)
     else:
-        st.error("Dieses Event wurde nicht gefunden oder der Link ist abgelaufen.")
-        if st.button("Zur Hauptseite"): st.query_params.clear()
-
+        st.error("Dieses Event wurde nicht gefunden.")
+        if st.button("Zurück"):
+            st.query_params.clear()
+            st.rerun()
 else:
-    # ADMIN MODE: Volle Funktionalität
+    # --- ADMIN MODE ---
     mode = st.sidebar.radio("Navigation", ["📊 Dashboard", "⚙️ API Verwaltung"])
 
     if mode == "⚙️ API Verwaltung":
         st.title("⚙️ API Verwaltung")
-        with st.form("new_event"):
-            n = st.text_input("Name")
-            u = st.text_input("URL")
+        with st.form("new_event", clear_on_submit=True):
+            n = st.text_input("Name des Events")
+            u = st.text_input("RaceResult JSON URL")
             if st.form_submit_button("Hinzufügen") and n and u:
                 st.session_state.event_store.append({"name": n, "url": u})
                 st.rerun()
 
+        st.subheader("Gespeicherte Events & Share-Links")
         for i, ev in enumerate(st.session_state.event_store):
             col1, col2 = st.columns([4, 1])
-            # SHARE LINK GENERIEREN
-            base_url = "https://deine-app.streamlit.app" # Ersetze dies durch deine echte URL
-            share_url = f"{base_url}/?event={ev['name'].replace(' ', '%20')}"
+            # URL Encoding für Leerzeichen im Namen
+            encoded_name = urllib.parse.quote(ev['name'])
+            share_url = f"/?event={encoded_name}" 
+            
             col1.write(f"**{ev['name']}**")
-            col1.code(share_url, language="text") # Zeigt den Link zum Kopieren an
-            if col2.button("Löschen", key=i):
+            col1.code(share_url, language="text")
+            if col2.button("Löschen", key=f"del_{i}"):
                 st.session_state.event_store.pop(i)
                 st.rerun()
 
     elif mode == "📊 Dashboard":
         st.title("📊 Monitor Dashboard")
         if not st.session_state.event_store:
-            st.info("Keine Events konfiguriert.")
+            st.info("Keine Events konfiguriert. Bitte wechsle zur 'API Verwaltung'.")
         else:
-            sel_name = st.selectbox("Event wählen", [e['name'] for e in st.session_state.event_store])
-            sel_ev = next(e for e in st.session_state.event_store if e['name'] == sel_name)
-            # Hier folgt die normale render_competition Logik wie oben...
-            # (Aus Platzgründen gekürzt, Logik bleibt identisch)
-        
-        # Hol die URL zum ausgewählten Namen
-        selected_url = next(e['url'] for e in st.session_state.event_store if e['name'] == selected_event_name)
-        
-        refresh_rate = st.sidebar.slider("Auto-Refresh (Sekunden)", 10, 300, 30)
-        
-        # Daten laden und anzeigen
-        try:
-            res = requests.get(selected_url, timeout=10)
-            json_data = res.json()
-            if isinstance(json_data, dict) and 'data' in json_data:
-                df = pd.DataFrame(json_data['data'], columns=json_data.get('columns', []))
-            else:
-                df = pd.DataFrame(json_data)
-            
-            # Wettbewerbs-Trennung
-            comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz']), None)
-            
-            if comp_col:
-                for comp in df[comp_col].unique():
-                    render_competition(df[df[comp_col] == comp], str(comp))
-            else:
-                render_competition(df, selected_event_name)
-                
-            # Auto-Refresh
-            time.sleep(refresh_rate)
-            st.rerun()
-            
-        except Exception as e:
-            st.error(f"Fehler beim Laden des Events: {e}")
+            event_names = [e['name'] for e in st.session_state.event_store]
+            sel_name = st.selectbox("Wähle ein Event:", event_names)
+            selected_event = next(e for e in st.session_state.event_store if e['name'] == sel_name)
+            run_dashboard(selected_event)
