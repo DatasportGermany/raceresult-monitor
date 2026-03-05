@@ -125,7 +125,7 @@ refresh = st.sidebar.slider("Auto-Refresh (Sekunden)", 10, 300, 30)
 
 # --- DASHBOARD RENDERING ---
 if not st.session_state.events:
-    st.title("🏁 Race Track Monitor")
+    st.title("🏁 Datasport Wettbewerbs-Monitor")
     st.info("Willkommen! Bitte fügen Sie links eine API-URL aus RaceResult hinzu, um das Live-Tracking zu starten.")
     st.markdown("""
     **Voraussetzung für die API-Liste:**
