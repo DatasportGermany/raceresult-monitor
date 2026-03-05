@@ -169,7 +169,7 @@ else:
     if mode == "⚙️ API Verwaltung":
         st.title("Event Setup")
         with st.form("new_ev"):
-            n, u = st.text_input("Name"), st.text_input("URL")
+            n, u = st.text_input("Name"), st.text_input("URL der RR API")
             if st.form_submit_button("Hinzufügen"):
                 all_events.append({"name": n, "url": u}); save_events(all_events); st.rerun()
         for i, ev in enumerate(all_events):
