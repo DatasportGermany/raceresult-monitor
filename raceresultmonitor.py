@@ -40,6 +40,7 @@ def time_to_seconds(t_str):
 # --- RENDER LOGIK ---
 def render_competition(df, comp_name):
     """Sicherheits-Analyse: Wer ist statistisch überfällig (Pace-basiert)?"""
+    # Spaltennamen säubern
     df.columns = [str(c).strip() for c in df.columns]
     
     bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr']), None)
@@ -49,7 +50,7 @@ def render_competition(df, comp_name):
     status_col = next((c for c in df.columns if 'status' in c.lower()), None)
 
     time_keywords = ['start', 'km', 'split', 'mess', 'zwischen']
-    # Wichtig: Die Zeitspalten müssen in der API in der richtigen chronologischen Reihenfolge stehen!
+    # Chronologische Reihenfolge der Zeitspalten
     ordered_times = [c for c in df.columns if any(k in c.lower() for k in time_keywords) and c != goal_col] + [goal_col]
 
     if start_col and goal_col:
@@ -57,9 +58,11 @@ def render_competition(df, comp_name):
         now = datetime.now()
         now_sec = now.hour * 3600 + now.minute * 60 + now.second
 
+        # Zeit-Spalten in Sekunden umwandeln
         for col in ordered_times:
             df[f'{col}_sec'] = df[col].apply(time_to_seconds)
         
+        # Filter auf reguläre Teilnehmer
         df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy() if status_col else df.copy()
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         
@@ -81,52 +84,57 @@ def render_competition(df, comp_name):
                 last_point = start_col
                 last_sec = row[f'{start_col}_sec']
                 
-                # Finde den am weitesten fortgeschrittenen Punkt
-                for i in range(len(ordered_times) - 1):
-                    col_name = ordered_times[i]
-                    if row[f'{col_name}_sec'] > 0:
-                        last_point = col_name
-                        last_sec = row[f'{col_name}_sec']
+                # Finde den spätesten Punkt, den der Läufer passiert hat
+                for col_name in ordered_times:
+                    if col_name != goal_col and row[f'{col_name}_sec'] > 0:
+                        # Wir nehmen den Punkt mit dem höchsten Zeitwert (chronologisch am weitesten)
+                        if row[f'{col_name}_sec'] >= last_sec:
+                            last_point = col_name
+                            last_sec = row[f'{col_name}_sec']
                 
-                # Zeit seit letztem Kontakt (verhindere negative Werte durch UTC/Lokalzeit-Mix)
-                time_diff_sec = now_sec - last_sec
-                if time_diff_sec < 0: time_diff_sec = 0
+                # Zeit seit letztem Kontakt
+                time_diff_sec = max(0, now_sec - last_sec)
                 time_since_last_contact = time_diff_sec / 60
                 
-                # Hol den Durchschnitt für diesen Sektor (Fallback 60 Min)
+                # Sektor-Vergleich
                 avg_sec = sector_averages.get(last_point, 3600) 
                 avg_min = avg_sec / 60
                 
-                # Flagge wenn: Zeit seit letztem Kontakt > 1.5 * Durchschnittszeit des Sektors
+                # Warnschwelle 150% (50% langsamer als Schnitt)
                 is_overdue = time_since_last_contact > (avg_min * 1.5)
                 
                 status_text = f"{int(time_since_last_contact)} Min seit {last_point}"
                 if is_overdue:
                     status_text = f"🚩 {status_text} (Schnitt: {int(avg_min)} Min)"
                 
-                # Wir geben ein Dictionary zurück, das ist sicherer für .apply(pd.Series)
-                return {
+                return pd.Series({
                     'Letzter Kontakt': last_point, 
                     'Sicherheits-Status': status_text, 
                     'Sort_Min': time_since_last_contact
-                }
+                })
 
-            # Hier wird die analyze_safety Funktion aufgerufen und das Ergebnis korrekt zugewiesen
-            safety_results = auf_strecke.apply(analyze_safety, axis=1, result_type='expand')
-            auf_strecke = pd.concat([auf_strecke, safety_results], axis=1)
+            # Neue Spalten berechnen
+            new_cols = auf_strecke.apply(analyze_safety, axis=1)
+            auf_strecke = pd.concat([auf_strecke, new_cols], axis=1)
             
+            # Anzeige-Filter
             display_list = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c in auf_strecke.columns]
             
             st.warning(f"⚠️ {len(auf_strecke)} Teilnehmer auf der Strecke")
+            
+            # Sicherer Sortier-Vorgang
+            if 'Sort_Min' in auf_strecke.columns:
+                auf_strecke = auf_strecke.sort_values(by='Sort_Min', ascending=False)
+            
             st.dataframe(
-                auf_strecke[display_list].sort_values(by='Sort_Min', ascending=False), 
+                auf_strecke[display_list], 
                 use_container_width=True, 
                 hide_index=True
             )
         else:
-            st.success("✅ Alle Teilnehmer im Ziel.")
+            st.success("✅ Alle regulär gestarteten Teilnehmer sind im Ziel.")
     else:
-        st.error(f"Konnte Start- oder Zielspalte nicht finden.")
+        st.error(f"Spaltenfehler: Start- oder Zielspalte konnte nicht identifiziert werden.")
 # --- DASHBOARD & NAVIGATION ---
 def run_dashboard(event_obj):
     if not st.query_params.get("event"):
