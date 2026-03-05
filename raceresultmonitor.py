@@ -20,7 +20,7 @@ def load_events():
 def save_events(events):
     with open(DB_FILE, "w") as f: json.dump(events, f)
 
-# --- DESIGN ---
+# --- DESIGN (ADAPTIV) ---
 def apply_custom_design():
     st.markdown("""
         <style>
@@ -71,6 +71,7 @@ def render_competition(df, comp_name, time_mode):
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
 
+        # ZEIT-LOGIK (UTC+1 Fix)
         now_local = datetime.utcnow() + timedelta(hours=1) 
         
         if time_mode == "Simulation (Letzter Finisher)" and not im_ziel.empty:
@@ -83,20 +84,17 @@ def render_competition(df, comp_name, time_mode):
         st.markdown('<div class="comp-container">', unsafe_allow_html=True)
         st.subheader(f"🏆 {comp_name}")
 
-        # Fortschritts-Logik
+        # Fortschritts-Zustände
         total_gestartet = len(auf_strecke) + len(im_ziel)
         
         if total_gestartet == 0:
-            # Fall 1: Niemand hat eine Startzeit
             st.info("Noch nicht gestartet")
         elif not auf_strecke.empty:
-            # Fall 2: Rennen läuft
             noch_fehlend = len(auf_strecke)
             progress_val = len(im_ziel) / total_gestartet
             st.write(f"Fortschritt: {len(im_ziel)} von {total_gestartet} im Ziel ({noch_fehlend} fehlen noch)")
             st.progress(progress_val)
 
-            # --- Sicherheits-Analyse ---
             sector_averages = {}
             for i in range(len(ordered_times) - 1):
                 col_a, col_b = ordered_times[i], ordered_times[i+1]
@@ -125,6 +123,10 @@ def render_competition(df, comp_name, time_mode):
             res = auf_strecke.apply(analyze_safety, axis=1)
             auf_strecke = pd.concat([auf_strecke, res], axis=1)
             
+            # LINKSBÜNDIG-FIX: Startnummer zu Text konvertieren
+            auf_strecke[bib_col] = auf_strecke[bib_col].astype(str)
+            
+            # Sortierung
             auf_strecke_sorted = auf_strecke.sort_values(by=['Is_Overdue', 'Sort_Min'], ascending=[False, False])
             
             st.info(f"Basis-Zeit {label}: {str(timedelta(seconds=int(now_sec)))} — Update: {now_local.strftime('%H:%M:%S')}")
@@ -132,7 +134,6 @@ def render_competition(df, comp_name, time_mode):
             disp = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c in auf_strecke_sorted.columns]
             st.dataframe(auf_strecke_sorted[disp], use_container_width=True, hide_index=True)
         else:
-            # Fall 3: Alle Gestarteten sind im Ziel
             st.success("Alle Teilnehmer im Ziel.")
         
         st.markdown('</div>', unsafe_allow_html=True)
@@ -162,7 +163,7 @@ if p_event:
             else: render_competition(df, ev['name'], t_mode)
             time.sleep(sync_interval)
             st.rerun()
-        except Exception as e: st.error(f"Ladefehler: {e}")
+        except: st.error("Ladefehler.")
 else:
     mode = st.sidebar.radio("Navigation", ["📊 Dashboard", "⚙️ API Verwaltung"])
     if mode == "⚙️ API Verwaltung":
