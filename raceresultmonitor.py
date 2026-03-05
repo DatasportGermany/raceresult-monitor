@@ -85,10 +85,14 @@ def render_competition(df, comp_name, time_mode):
         st.markdown('<div class="comp-container">', unsafe_allow_html=True)
         st.subheader(f"🏆 {comp_name}")
 
+        # Fortschrittsbalken mit "Noch fehlend"-Anzeige
         total_started = len(auf_strecke) + len(im_ziel)
         if total_started > 0:
+            noch_fehlend = len(auf_strecke)
             progress_val = len(im_ziel) / total_started
-            st.write(f"Fortschritt: {len(im_ziel)} von {total_started} im Ziel")
+            
+            # Die neue Zeile mit der gewünschten Klammer-Anzeige
+            st.write(f"Fortschritt: {len(im_ziel)} von {total_started} im Ziel ({noch_fehlend} fehlen noch)")
             st.progress(progress_val)
 
         if not auf_strecke.empty:
