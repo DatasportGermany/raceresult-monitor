@@ -20,7 +20,7 @@ def load_events():
 def save_events(events):
     with open(DB_FILE, "w") as f: json.dump(events, f)
 
-# --- DESIGN (ADAPTIV FÜR DARK/LIGHT MODE) ---
+# --- DESIGN ---
 def apply_custom_design():
     st.markdown("""
         <style>
@@ -45,7 +45,6 @@ def time_to_seconds(t_str):
         return 0
     except: return 0
 
-# --- DATA FETCHING (VERHINDERT CACHING) ---
 def fetch_race_data(url):
     sep = "&" if "?" in url else "?"
     clean_url = f"{url}{sep}nocache={int(time.time())}"
@@ -72,13 +71,16 @@ def render_competition(df, comp_name, time_mode):
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
 
+        # ZEIT-LOGIK MIT UTC+1 FIX
+        # Wir addieren 1 Stunde für die deutsche Zeit (MEZ)
+        now_local = datetime.utcnow() + timedelta(hours=1) 
+        
         if time_mode == "Simulation (Letzter Finisher)" and not im_ziel.empty:
             now_sec = im_ziel[f'{goal_col}_sec'].max()
             label = "Simuliert (Letzter Finisher)"
         else:
-            n = datetime.now()
-            now_sec = n.hour * 3600 + n.minute * 60 + n.second
-            label = "Echtzeit (System)"
+            now_sec = now_local.hour * 3600 + now_local.minute * 60 + now_local.second
+            label = "Echtzeit (lokal)"
 
         st.markdown('<div class="comp-container">', unsafe_allow_html=True)
         st.subheader(f"🏆 {comp_name}")
@@ -113,7 +115,8 @@ def render_competition(df, comp_name, time_mode):
             res = auf_strecke.apply(analyze_safety, axis=1)
             auf_strecke = pd.concat([auf_strecke, res], axis=1)
             
-            st.info(f"Basis-Zeit {label}: {str(timedelta(seconds=int(now_sec)))} — Update: {datetime.now().strftime('%H:%M:%S')}")
+            # Anzeige der korrekten Lokalzeit
+            st.info(f"Basis-Zeit {label}: {str(timedelta(seconds=int(now_sec)))} — Letztes Update: {now_local.strftime('%H:%M:%S')}")
             
             disp = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c in auf_strecke.columns]
             st.dataframe(auf_strecke.sort_values('Sort_Min', ascending=False)[disp], use_container_width=True, hide_index=True)
