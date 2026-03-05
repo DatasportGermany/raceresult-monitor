@@ -83,21 +83,26 @@ def render_competition(df, comp_name, time_mode):
         st.markdown('<div class="comp-container">', unsafe_allow_html=True)
         st.subheader(f"🏆 {comp_name}")
 
-        total_started = len(auf_strecke) + len(im_ziel)
-        if total_started > 0:
+        # Fortschritts-Logik
+        total_gestartet = len(auf_strecke) + len(im_ziel)
+        
+        if total_gestartet == 0:
+            # Fall 1: Niemand hat eine Startzeit
+            st.info("Noch nicht gestartet")
+        elif not auf_strecke.empty:
+            # Fall 2: Rennen läuft
             noch_fehlend = len(auf_strecke)
-            progress_val = len(im_ziel) / total_started
-            st.write(f"Fortschritt: {len(im_ziel)} von {total_started} im Ziel ({noch_fehlend} fehlen noch)")
+            progress_val = len(im_ziel) / total_gestartet
+            st.write(f"Fortschritt: {len(im_ziel)} von {total_gestartet} im Ziel ({noch_fehlend} fehlen noch)")
             st.progress(progress_val)
 
-        if not auf_strecke.empty:
+            # --- Sicherheits-Analyse ---
             sector_averages = {}
             for i in range(len(ordered_times) - 1):
                 col_a, col_b = ordered_times[i], ordered_times[i+1]
                 fin = df_reg[(df_reg[f'{col_a}_sec'] > 0) & (df_reg[f'{col_b}_sec'] > 0)]
                 if not fin.empty: sector_averages[col_a] = (fin[f'{col_b}_sec'] - fin[f'{col_a}_sec']).mean()
 
-            # --- DIESER BLOCK WURDE KORRIGIERT ---
             def analyze_safety(row):
                 lp, ls = start_col, row[f'{start_col}_sec']
                 for c in ordered_times:
@@ -127,6 +132,7 @@ def render_competition(df, comp_name, time_mode):
             disp = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c in auf_strecke_sorted.columns]
             st.dataframe(auf_strecke_sorted[disp], use_container_width=True, hide_index=True)
         else:
+            # Fall 3: Alle Gestarteten sind im Ziel
             st.success("Alle Teilnehmer im Ziel.")
         
         st.markdown('</div>', unsafe_allow_html=True)
