@@ -20,42 +20,21 @@ def load_events():
 def save_events(events):
     with open(DB_FILE, "w") as f: json.dump(events, f)
 
-# --- MODERNES DATASPORT-DESIGN (CSS) ---
+# --- KLASSISCHES DESIGN (Adaptiv für Dark/Light Mode) ---
 def apply_custom_design():
     st.markdown("""
         <style>
-        /* Hintergrund und Schrift */
-        .stApp { background-color: #f4f7f9 !important; }
-        
-        /* Überschriften-Farbe fixieren */
-        h1, h2, h3 { color: #003366 !important; font-family: 'Segoe UI', Roboto, sans-serif; }
-        
-        /* Sidebar Design */
-        [data-testid="stSidebar"] { background-color: #003366; color: white; }
-        [data-testid="stSidebar"] * { color: white !important; }
-        
-        /* Cards für Wettbewerbe */
-        .comp-card {
-            background-color: white !important;
-            padding: 25px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+        /* Rahmen um die Wettbewerbe für Struktur, ohne feste Farben */
+        .comp-container {
+            border: 1px solid #464b5d;
+            padding: 20px;
+            border-radius: 10px;
             margin-bottom: 25px;
-            border-left: 8px solid #003366;
-            color: #31333F;
-        }
-
-        /* Verhindert, dass Streamlit-Inhalte die Card überlagern */
-        .comp-card h3 {
-            margin-top: 0 !important;
-            margin-bottom: 15px !important;
         }
         
-        /* Streamlit Elemente anpassen */
-        .stButton>button {
-            background-color: #003366;
-            color: white;
-            border-radius: 4px;
+        /* Sidebar Icons/Text Farbe */
+        [data-testid="stSidebar"] {
+            border-right: 1px solid #464b5d;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -90,28 +69,23 @@ def render_competition(df, comp_name):
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
 
-        # REFERENZ-ZEIT Logik
+        # REFERENZ-ZEIT
         if not im_ziel.empty:
             now_sec = im_ziel[f'{goal_col}_sec'].max()
         else:
             now = datetime.now()
             now_sec = now.hour * 3600 + now.minute * 60 + now.second
 
-        # Card-Container Start (HTML)
-        # Wir rendern die Überschrift direkt in den Container
-        st.markdown(f'''
-            <div class="comp-card">
-                <h3>🏆 {comp_name}</h3>
-        ''', unsafe_allow_html=True)
+        # Container Start
+        st.markdown('<div class="comp-container">', unsafe_allow_html=True)
+        st.subheader(f"🏆 {comp_name}")
 
-        # Fortschrittsbalken Logik
+        # Fortschrittsbalken
         total_started = len(auf_strecke) + len(im_ziel)
         if total_started > 0:
             progress_val = len(im_ziel) / total_started
-            st.write(f"**Gesamtfortschritt: {len(im_ziel)} von {total_started} Teilnehmern im Ziel**")
+            st.write(f"Fortschritt: {len(im_ziel)} von {total_started} im Ziel")
             st.progress(progress_val)
-        
-        st.markdown("<br>", unsafe_allow_html=True)
 
         if not auf_strecke.empty:
             # Sektor-Averages
@@ -140,14 +114,14 @@ def render_competition(df, comp_name):
             res = auf_strecke.apply(analyze_safety, axis=1)
             auf_strecke = pd.concat([auf_strecke, res], axis=1)
             
-            st.info(f"Aktuell {len(auf_strecke)} Teilnehmer auf der Strecke (Referenzzeit: {timedelta(seconds=int(now_sec))})")
+            st.info(f"Aktuell {len(auf_strecke)} Teilnehmer auf der Strecke (Ref: {timedelta(seconds=int(now_sec))})")
             
             disp = [c for c in [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status'] if c in auf_strecke.columns]
             st.dataframe(auf_strecke.sort_values('Sort_Min', ascending=False)[disp], use_container_width=True, hide_index=True)
         else:
             st.success("Alle Teilnehmer im Ziel.")
         
-        st.markdown('</div>', unsafe_allow_html=True) # Card-Container Ende
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # --- NAVIGATION ---
 st.set_page_config(page_title="Race Monitor Pro", layout="wide")
@@ -162,17 +136,13 @@ if public_event_name:
     if ev:
         try:
             res = requests.get(ev['url'], timeout=10).json()
-            if isinstance(res, dict) and 'data' in res:
-                df = pd.DataFrame(res['data'], columns=res.get('columns', []))
-            else:
-                df = pd.DataFrame(res)
-            
+            df = pd.DataFrame(res['data'], columns=res.get('columns', [])) if 'data' in res else pd.DataFrame(res)
             comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
             if comp_col:
                 for c in df[comp_col].unique(): render_competition(df[df[comp_col] == c], str(c))
             else: render_competition(df, ev['name'])
             time.sleep(30); st.rerun()
-        except Exception as e: st.error(f"Fehler: {e}")
+        except Exception as e: st.error(f"Fehler beim Laden.")
 else:
     mode = st.sidebar.radio("Navigation", ["📊 Dashboard", "⚙️ API Verwaltung"])
     if mode == "⚙️ API Verwaltung":
@@ -193,17 +163,11 @@ else:
             ev = next(e for e in all_events if e['name'] == sel)
             try:
                 res = requests.get(ev['url'], timeout=10).json()
-                if isinstance(res, dict) and 'data' in res:
-                    df = pd.DataFrame(res['data'], columns=res.get('columns', []))
-                else:
-                    df = pd.DataFrame(res)
-                
+                df = pd.DataFrame(res['data'], columns=res.get('columns', [])) if 'data' in res else pd.DataFrame(res)
+                df.columns = [str(c).strip() for c in df.columns]
                 comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
                 if comp_col:
-                    for c in df[comp_col].unique():
-                        render_competition(df[df[comp_col] == c], str(c))
-                else:
-                    render_competition(df, ev['name'])
-                
+                    for c in df[comp_col].unique(): render_competition(df[df[comp_col] == c], str(c))
+                else: render_competition(df, ev['name'])
                 time.sleep(30); st.rerun()
-            except Exception as e: st.error(f"Fehler beim Laden: {e}")
+            except Exception as e: st.error(f"Fehler: {e}")
