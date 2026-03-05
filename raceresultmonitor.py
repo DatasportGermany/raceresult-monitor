@@ -47,7 +47,6 @@ def time_to_seconds(t_str):
 
 # --- DATA FETCHING (VERHINDERT CACHING) ---
 def fetch_race_data(url):
-    # Hängt einen Zeitstempel an, damit der Server/Browser keine alte Kopie liefert
     sep = "&" if "?" in url else "?"
     clean_url = f"{url}{sep}nocache={int(time.time())}"
     r = requests.get(clean_url, timeout=10).json()
@@ -73,7 +72,6 @@ def render_competition(df, comp_name, time_mode):
         auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
         im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
 
-        # ZEIT-LOGIK
         if time_mode == "Simulation (Letzter Finisher)" and not im_ziel.empty:
             now_sec = im_ziel[f'{goal_col}_sec'].max()
             label = "Simuliert (Letzter Finisher)"
@@ -85,7 +83,6 @@ def render_competition(df, comp_name, time_mode):
         st.markdown('<div class="comp-container">', unsafe_allow_html=True)
         st.subheader(f"🏆 {comp_name}")
 
-        # Fortschrittsbalken
         total_started = len(auf_strecke) + len(im_ziel)
         if total_started > 0:
             progress_val = len(im_ziel) / total_started
@@ -130,7 +127,6 @@ st.set_page_config(page_title="Race Monitor Pro", layout="wide")
 apply_custom_design()
 all_events = load_events()
 
-# Sidebar Einstellungen
 st.sidebar.title("Einstellungen")
 t_mode = st.sidebar.radio("Zeit-Referenz", ["Live-Uhrzeit (System)", "Simulation (Letzter Finisher)"])
 sync_interval = st.sidebar.slider("Synchronisations-Intervall (s)", 5, 300, 10)
@@ -176,8 +172,10 @@ else:
                 df.columns = [str(c).strip() for c in df.columns]
                 c_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
                 if c_col:
-                    for c in df[comp_col].unique(): render_competition(df[df[c_col] == c], str(c), t_mode)
-                else: render_competition(df, ev['name'], t_mode)
+                    for c_val in df[c_col].unique(): 
+                        render_competition(df[df[c_col] == c_val], str(c_val), t_mode)
+                else: 
+                    render_competition(df, ev['name'], t_mode)
                 time.sleep(sync_interval)
                 st.rerun()
             except Exception as e: st.error(f"Ladefehler: {e}")
