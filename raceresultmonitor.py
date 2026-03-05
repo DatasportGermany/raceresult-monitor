@@ -54,12 +54,21 @@ def fetch_race_data(url):
 def render_competition(df, comp_name, time_mode):
     df.columns = [str(c).strip() for c in df.columns]
     
-    # Robuste Spaltensuche
-    bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr']), None)
-    name_col = next((c for c in df.columns if any(k in c.lower() for k in ['name', 'nachname', 'vorname', 'teilnehmer'])), None)
-    start_col = next((c for c in df.columns if c.lower() == 'start' or 'startzeit' in c.lower()), None)
-    goal_col = next((c for c in df.columns if c.lower() == 'ziel' or 'finish' in c.lower()), None)
-    status_col = next((c for c in df.columns if 'status' in c.lower()), None)
+# Erweiterte, ultra-robuste Spaltensuche
+    bib_col = next((c for c in df.columns if c.lower() in 
+                    ['startnummer', 'bib', 'stnr', 'snr', 'nr', 'nummer', 'bibnr']), None)
+    
+    name_col = next((c for c in df.columns if any(k in c.lower() for k in 
+                    ['name', 'nachname', 'vorname', 'teilnehmer', 'athlete', 'fullname'])), None)
+    
+    start_col = next((c for c in df.columns if any(k in c.lower() for k in 
+                    ['start', 'zeit_start', 'gunshot', 'startzeit'])), None)
+    
+    goal_col = next((c for c in df.columns if any(k in c.lower() for k in 
+                    ['ziel', 'finish', 'ankunft', 'zeit_ziel', 'goal'])), None)
+    
+    status_col = next((c for c in df.columns if any(k in c.lower() for k in 
+                    ['status', 'disq', 'dnf', 'dns'])), None)
 
     # Pflichtspalten prüfen
     if not bib_col or not start_col or not goal_col:
