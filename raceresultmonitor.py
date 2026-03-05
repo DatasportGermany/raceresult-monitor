@@ -82,9 +82,29 @@ def run_dashboard(event_obj):
 
     try:
         res = requests.get(event_obj['url'], timeout=10)
-        data = res.json()
-        df = pd.DataFrame(data['data'], columns=data.get('columns', []))
-        comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz']), None)
+        json_data = res.json()
+        
+        # --- FLEXIBLE DATEN-EXTRAKTION ---
+        if isinstance(json_data, dict) and 'data' in json_data:
+            # Format 1: { "columns": [...], "data": [[...]] }
+            df = pd.DataFrame(json_data['data'], columns=json_data.get('columns', []))
+        elif isinstance(json_data, list):
+            # Format 2: [ {"Spalte1": "Wert1", ...}, {...} ]
+            df = pd.DataFrame(json_data)
+        else:
+            # Falls das JSON in einer anderen Struktur kommt
+            st.error("Unerwartetes JSON-Format von der API.")
+            return
+
+        if df.empty:
+            st.warning("Keine Daten in der API gefunden.")
+            return
+
+        # Spaltennamen säubern
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        # Wettbewerbs-Trennung
+        comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
         
         if comp_col:
             for comp in df[comp_col].unique():
@@ -94,6 +114,7 @@ def run_dashboard(event_obj):
             
         time.sleep(refresh_rate)
         st.rerun()
+        
     except Exception as e:
         st.error(f"Fehler beim Laden: {e}")
 
