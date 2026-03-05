@@ -92,7 +92,7 @@ if mode == "⚙️ API Verwaltung":
 
 # --- MODUS: DASHBOARD ---
 elif mode == "📊 Dashboard":
-    st.title("📊 Race Monitor Dashboard")
+    st.title("📊 Datasport Event Überblick")
 
     if not st.session_state.event_store:
         st.info("Keine Events konfiguriert. Bitte wechsle zur 'API Verwaltung'.")
