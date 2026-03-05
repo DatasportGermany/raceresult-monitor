@@ -54,76 +54,83 @@ def fetch_race_data(url):
 def render_competition(df, comp_name, time_mode):
     df.columns = [str(c).strip() for c in df.columns]
     
-    bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr']), "Bib")
-    name_col = next((c for c in df.columns if any(k in c.lower() for k in ['name', 'nachname', 'vorname'])), "Name")
+    # Robuste Spaltensuche
+    bib_col = next((c for c in df.columns if c.lower() in ['startnummer', 'bib', 'stnr']), None)
+    name_col = next((c for c in df.columns if any(k in c.lower() for k in ['name', 'nachname', 'vorname', 'teilnehmer'])), None)
     start_col = next((c for c in df.columns if c.lower() == 'start' or 'startzeit' in c.lower()), None)
     goal_col = next((c for c in df.columns if c.lower() == 'ziel' or 'finish' in c.lower()), None)
     status_col = next((c for c in df.columns if 'status' in c.lower()), None)
 
+    # Pflichtspalten prüfen
+    if not bib_col or not start_col or not goal_col:
+        st.warning(f"Wettbewerb '{comp_name}' übersprungen: Spalten für Startnummer, Start oder Ziel nicht gefunden.")
+        return
+
     time_keywords = ['start', 'km', 'split', 'mess', 'zwischen']
     ordered_times = [c for c in df.columns if any(k in c.lower() for k in time_keywords) and c != goal_col] + [goal_col]
 
-    if start_col and goal_col:
-        for col in ordered_times: df[f'{col}_sec'] = df[col].apply(time_to_seconds)
-        df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy() if status_col else df.copy()
-        auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
-        im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
+    for col in ordered_times: 
+        df[f'{col}_sec'] = df[col].apply(time_to_seconds)
+    
+    df_reg = df[df[status_col].astype(str).str.strip() == "0"].copy() if status_col else df.copy()
+    auf_strecke = df_reg[(df_reg[f'{start_col}_sec'] > 0) & (df_reg[f'{goal_col}_sec'] == 0)].copy()
+    im_ziel = df_reg[df_reg[f'{goal_col}_sec'] > 0].copy()
 
-        # UTC+1 Fix
-        now_local = datetime.utcnow() + timedelta(hours=1) 
-        
-        if time_mode == "Simulation (Letzter Finisher)" and not im_ziel.empty:
-            now_sec = im_ziel[f'{goal_col}_sec'].max()
-            label = "Simuliert"
+    # UTC+1 Fix
+    now_local = datetime.utcnow() + timedelta(hours=1) 
+    
+    if time_mode == "Simulation (Letzter Finisher)" and not im_ziel.empty:
+        now_sec = im_ziel[f'{goal_col}_sec'].max()
+        label = "Simuliert"
+    else:
+        now_sec = now_local.hour * 3600 + now_local.minute * 60 + now_local.second
+        label = "Echtzeit"
+
+    total_gestartet = len(auf_strecke) + len(im_ziel)
+    status_emoji = "⏳" if total_gestartet == 0 else "🏃" if not auf_strecke.empty else "✅"
+    
+    with st.expander(f"{status_emoji} {comp_name}", expanded=not auf_strecke.empty):
+        if total_gestartet == 0:
+            st.info("Noch nicht gestartet")
+        elif not auf_strecke.empty:
+            noch_fehlend = len(auf_strecke)
+            progress_val = len(im_ziel) / total_gestartet
+            st.write(f"Fortschritt: {len(im_ziel)} von {total_gestartet} im Ziel ({noch_fehlend} fehlen noch)")
+            st.progress(progress_val)
+
+            sector_averages = {}
+            for i in range(len(ordered_times) - 1):
+                col_a, col_b = ordered_times[i], ordered_times[i+1]
+                fin = df_reg[(df_reg[f'{col_a}_sec'] > 0) & (df_reg[f'{col_b}_sec'] > 0)]
+                if not fin.empty: sector_averages[col_a] = (fin[f'{col_b}_sec'] - fin[f'{col_a}_sec']).mean()
+
+            def analyze_safety(row):
+                lp, ls = start_col, row[f'{start_col}_sec']
+                for c in ordered_times:
+                    if c != goal_col and row[f'{c}_sec'] > 0:
+                        if row[f'{c}_sec'] >= ls: lp, ls = c, row[f'{c}_sec']
+                diff_m = max(0, now_sec - ls) / 60
+                avg_m = sector_averages.get(lp, 3600) / 60
+                is_overdue = diff_m > (avg_m * 1.5)
+                status = f"{int(diff_m)}m (Schnitt: {int(avg_m)}m)"
+                if is_overdue: status = "🚩 OVERDUE: " + status
+                return pd.Series({'Letzter Kontakt': lp, 'Sicherheits-Status': status, 'Sort_Min': diff_m, 'Is_Overdue': 1 if is_overdue else 0})
+
+            res = auf_strecke.apply(analyze_safety, axis=1)
+            auf_strecke = pd.concat([auf_strecke, res], axis=1)
+            auf_strecke[bib_col] = auf_strecke[bib_col].astype(str)
+            auf_strecke_sorted = auf_strecke.sort_values(by=['Is_Overdue', 'Sort_Min'], ascending=[False, False])
+            
+            st.caption(f"Basis-Zeit {label}: {str(timedelta(seconds=int(now_sec)))} — Update: {now_local.strftime('%H:%M:%S')}")
+            
+            # Anzeige-Spalten (Nur nehmen was existiert)
+            display_cols = [bib_col]
+            if name_col: display_cols.append(name_col)
+            display_cols += ['Letzter Kontakt', 'Sicherheits-Status']
+            
+            st.dataframe(auf_strecke_sorted[display_cols], use_container_width=True, hide_index=True)
         else:
-            now_sec = now_local.hour * 3600 + now_local.minute * 60 + now_local.second
-            label = "Echtzeit"
-
-        total_gestartet = len(auf_strecke) + len(im_ziel)
-        status_emoji = "⏳" if total_gestartet == 0 else "🏃" if not auf_strecke.empty else "✅"
-        
-        # Expander für Zuklapp-Funktion
-        with st.expander(f"{status_emoji} {comp_name}", expanded=not auf_strecke.empty):
-            if total_gestartet == 0:
-                st.info("Noch nicht gestartet")
-            elif not auf_strecke.empty:
-                noch_fehlend = len(auf_strecke)
-                progress_val = len(im_ziel) / total_gestartet
-                st.write(f"Fortschritt: {len(im_ziel)} von {total_gestartet} im Ziel ({noch_fehlend} fehlen noch)")
-                st.progress(progress_val)
-
-                sector_averages = {}
-                for i in range(len(ordered_times) - 1):
-                    col_a, col_b = ordered_times[i], ordered_times[i+1]
-                    fin = df_reg[(df_reg[f'{col_a}_sec'] > 0) & (df_reg[f'{col_b}_sec'] > 0)]
-                    if not fin.empty: sector_averages[col_a] = (fin[f'{col_b}_sec'] - fin[f'{col_a}_sec']).mean()
-
-                def analyze_safety(row):
-                    lp, ls = start_col, row[f'{start_col}_sec']
-                    for c in ordered_times:
-                        if c != goal_col and row[f'{c}_sec'] > 0:
-                            if row[f'{c}_sec'] >= ls: lp, ls = c, row[f'{c}_sec']
-                    diff_m = max(0, now_sec - ls) / 60
-                    avg_m = sector_averages.get(lp, 3600) / 60
-                    is_overdue = diff_m > (avg_m * 1.5)
-                    status = f"{int(diff_m)}m (Schnitt: {int(avg_m)}m)"
-                    if is_overdue: status = "🚩 OVERDUE: " + status
-                    return pd.Series({'Letzter Kontakt': lp, 'Sicherheits-Status': status, 'Sort_Min': diff_m, 'Is_Overdue': 1 if is_overdue else 0})
-
-                res = auf_strecke.apply(analyze_safety, axis=1)
-                auf_strecke = pd.concat([auf_strecke, res], axis=1)
-                
-                # Startnummer linksbündig (String)
-                auf_strecke[bib_col] = auf_strecke[bib_col].astype(str)
-                
-                # Sortierung: Flagge zuerst, dann Zeit
-                auf_strecke_sorted = auf_strecke.sort_values(by=['Is_Overdue', 'Sort_Min'], ascending=[False, False])
-                
-                st.caption(f"Basis-Zeit {label}: {str(timedelta(seconds=int(now_sec)))} — Update: {now_local.strftime('%H:%M:%S')}")
-                disp = [bib_col, name_col, 'Letzter Kontakt', 'Sicherheits-Status']
-                st.dataframe(auf_strecke_sorted[disp], use_container_width=True, hide_index=True)
-            else:
-                st.success("Wettbewerb beendet - Alle Teilnehmer im Ziel.")
+            st.success("Wettbewerb beendet - Alle Teilnehmer im Ziel.")
 
 # --- APP FLOW ---
 st.set_page_config(page_title="Race Monitor Pro", layout="wide")
@@ -148,11 +155,7 @@ if p_event:
             if c_col:
                 alle_wettbewerbe = list(df[c_col].unique())
                 st.sidebar.subheader("Reihenfolge & Filter")
-                sortierte_liste = st.sidebar.multiselect(
-                    "Wettbewerbe verschieben/ausblenden:", 
-                    options=alle_wettbewerbe, 
-                    default=alle_wettbewerbe
-                )
+                sortierte_liste = st.sidebar.multiselect("Anzeige anpassen:", options=alle_wettbewerbe, default=alle_wettbewerbe)
                 st.title(f"Live Monitor: {p_event}")
                 for c_val in sortierte_liste: 
                     render_competition(df[df[c_col] == c_val], str(c_val), t_mode)
@@ -176,7 +179,6 @@ else:
             c1.info(f"**{ev['name']}**")
             c1.code(f"/?event={urllib.parse.quote(ev['name'])}")
             if c2.button("Löschen", key=f"del_{i}"): all_events.pop(i); save_events(all_events); st.rerun()
-            
     elif mode == "📊 Dashboard":
         if not all_events: st.info("Bitte Event anlegen.")
         else:
