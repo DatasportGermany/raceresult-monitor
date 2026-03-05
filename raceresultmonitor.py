@@ -175,14 +175,43 @@ else:
             c1.code(f"/?event={urllib.parse.quote(ev['name'])}")
             if c2.button("Löschen", key=i): all_events.pop(i); save_events(all_events); st.rerun()
     elif mode == "📊 Dashboard":
-        if not all_events: st.info("Bitte Event anlegen.")
+        if not all_events: 
+            st.info("Bitte zuerst unter 'API Verwaltung' ein Event anlegen.")
         else:
-            sel = st.selectbox("Event wählen", [e['name'] for e in all_events])
-            # Hier dieselbe Render-Logik wie oben (aus Platzgründen verkürzt)
-            ev = next(e for e in all_events if e['name'] == sel)
+            sel_name = st.selectbox("Event wählen", [e['name'] for e in all_events])
+            selected_ev = next(e for e in all_events if e['name'] == sel_name)
+            
             try:
-                res = requests.get(ev['url'], timeout=10).json()
-                df = pd.DataFrame(res['data'], columns=res.get('columns', [])) if 'data' in res else pd.DataFrame(res)
-                for c in (df[next(col for col in df.columns if col.lower() in ['wettbewerb', 'event']), None].unique() if 'wettbewerb' in str(df.columns).lower() else [ev['name']]):
-                    render_competition(df, str(c))
-            except: st.warning("Fehler beim Laden.")
+                # API Daten abrufen
+                response = requests.get(selected_ev['url'], timeout=10)
+                res_json = response.json()
+                
+                # DataFrame erstellen (robust gegen verschiedene Formate)
+                if isinstance(res_json, dict) and 'data' in res_json:
+                    df = pd.DataFrame(res_json['data'], columns=res_json.get('columns', []))
+                else:
+                    df = pd.DataFrame(res_json)
+                
+                # Spaltennamen säubern
+                df.columns = [str(c).strip() for c in df.columns]
+                
+                # Suchen nach der Wettbewerbs-Spalte
+                comp_col = next((c for c in df.columns if c.lower() in ['wettbewerb', 'event', 'konkurrenz', 'competition']), None)
+                
+                if comp_col:
+                    # Wenn mehrere Wettbewerbe in einer API sind
+                    for comp in df[comp_col].unique():
+                        render_competition(df[df[comp_col] == comp], str(comp))
+                        st.divider()
+                else:
+                    # Wenn nur ein Wettbewerb in der API ist
+                    render_competition(df, selected_ev['name'])
+                    
+                # Auto-Refresh Logik im Dashboard
+                refresh_rate = st.sidebar.slider("Auto-Refresh (s)", 10, 300, 30)
+                time.sleep(refresh_rate)
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"Fehler beim Laden der API: {e}")
+                st.info("Hinweis: Überprüfe, ob die URL korrekt ist und die API Daten im JSON-Format liefert.")
